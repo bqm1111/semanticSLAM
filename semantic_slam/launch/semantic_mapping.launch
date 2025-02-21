@@ -1,0 +1,15 @@
+<launch>
+
+<rosparam file="$(find semantic_slam)/params/demo.yaml" command="load"/>
+<node pkg="semantic_cloud" type="diffusion_cloud.py" name="semantic_cloud" output="screen"/>
+
+<rosparam file="$(find semantic_slam)/params/octomap_generator.yaml" command="load"/>
+<node pkg="octomap_generator" type="octomap_generator" name="octomap_generator" output="screen"/>
+
+<!--rviz-->
+<node pkg="rviz" type="rviz" name="rviz" args="-d $(find semantic_slam)/demo.rviz"/>
+    <arg name="bag_file" default="/home/sherlock/Pictures/demo.bag"/>
+
+    <node pkg="rosbag" type="play" name="rosbag_play" args="$(arg bag_file)" launch-prefix="bash -c 'sleep 5; rosbag play $(arg bag_file)'" output="screen"/>
+
+</launch>
