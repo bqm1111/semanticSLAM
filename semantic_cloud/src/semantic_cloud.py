@@ -279,9 +279,10 @@ class SemanticCloud:
                         self.semantic_colors[0], encoding="bgr8"
                     )
                 self.sem_img_pub.publish(semantic_color_msg)
-        
+
         # Publish point cloud
         cloud_ros = convert_to_pointcloud2(points, stamp=color_img_ros.header.stamp)
+        print(cloud_ros)
         self.pcl_pub.publish(cloud_ros)
 
     def predict_max(self, img):

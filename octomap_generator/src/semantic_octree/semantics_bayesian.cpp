@@ -4,6 +4,7 @@
 
 #define ALPHA 0.8
 #define EPSILON 0.001
+
 namespace octomap
 {
   // Struct ColorWithConfidence implementation -------------------------------------
@@ -91,6 +92,7 @@ namespace octomap
       if (semantic_colors[i].confidence < EPSILON)
         semantic_colors[i].confidence = EPSILON;
     }
+    
     // Keep top NUM_SEMANTICS colors and confidences
     std::sort(semantic_colors.begin(), semantic_colors.end()); // Asc order sorting
     SemanticsBayesian ret;
@@ -110,5 +112,4 @@ namespace octomap
     out << ')';
     return out;
   }
-
 } // namespace octomap

@@ -13,8 +13,4 @@ semantic_pcl:
   depth_image_topic: "/camera/depth/image"
 
   point_type: 1
-  frame_id: "/camera_rgb_optical_frame"
-  dataset: "ade20k" # sunrgbd
-  #dataset: "sunrgbd" # sunrgbd
-  model_path: "/home/sherlock/workspace/ROS/orb_slam_ws/src/semantic_cloud/pspnet_50_ade20k.pth"
-
+  frame_id: "openni_depth_optical_frame"
