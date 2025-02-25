@@ -6,8 +6,6 @@ import numpy as np
 from sensor_msgs.msg import PointCloud2, PointField
 from enum import Enum
 
-# import time
-
 
 class PointType(Enum):
     COLOR = 0
@@ -173,14 +171,15 @@ class ColorPclGenerator:
         self.ros_data[:, 0:3] = self.XYZ_vect
         self.ros_data[:, 4:5] = self.bgr0_vect.view("<f4")
         # print(self.ros_data)
-        
+
     def make_ros_cloud(self, stamp):
         # Assign data to ros msg
         # We should send directly in bytes, send in as a list is too slow, numpy tobytes is too slow, takes 0.3s.
         self.cloud_ros.data = list(memoryview(self.ros_data.ravel())[:])
         self.cloud_ros.header.stamp = stamp
         return self.cloud_ros
-    # 
+
+    #
     def generate_cloud_color(self, bgr_img, depth_img, stamp):
         """
         Generate color point cloud

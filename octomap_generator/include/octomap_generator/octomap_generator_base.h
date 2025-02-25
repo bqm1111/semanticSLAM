@@ -3,11 +3,6 @@
 
 #include <pcl/PCLPointCloud2.h>
 #include <octomap/octomap.h>
-/**
- * Interface for octomap_generator for polymorphism
- * \author Xuan Zhang
- * \data Mai-July 2018
- */
 class OctomapGeneratorBase
 {
 public:

@@ -1,0 +1,7 @@
+[submodule "semantic_cloud/include/diffusionMMS"]
+    path = semantic_cloud/include/diffusionMMS
+    url = git@github.com:ntnu-arl/diffusionMMS.git
+
+[submodule "vision_opencv"]
+    path = vision_opencv
+    url = https://github.com/ros-perception/vision_opencv.git
