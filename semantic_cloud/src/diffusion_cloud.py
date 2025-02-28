@@ -9,7 +9,7 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge, CvBridgeError
 
 import numpy as np
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, CameraInfo, Image
 from color_pcl_generator import PointType, ColorPclGenerator
 from diffusionMMS.engine import get_model
 from diffusionMMS.utils.helper import (
@@ -23,10 +23,162 @@ from omegaconf import OmegaConf
 from sensor_msgs.msg import PointCloud2, PointField
 import sensor_msgs.point_cloud2 as pc2
 from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Odometry
 import copy
 import torch
 import struct
 import tf
+import tf2_ros
+import tf.transformations as tf_trans
+
+import numpy as np
+import cv2
+from numba import njit, prange
+
+
+@njit(fastmath=True, parallel=True)
+def depth_to_color_frame(
+    depth_image_raw, depth_scale, depth_intrinsics, color_intrinsics, transform_matrix
+):
+    """
+    Convert a depth image from the depth optical frame to the color optical frame.
+    Only keeps pixels inside the bounding box of valid depth projections.
+    """
+
+    depth_meters = depth_image_raw.astype(np.float32) * depth_scale
+    h, w = depth_meters.shape
+
+    fx_d, fy_d, cx_d, cy_d = (
+        depth_intrinsics[0, 0],
+        depth_intrinsics[1, 1],
+        depth_intrinsics[0, 2],
+        depth_intrinsics[1, 2],
+    )
+    fx_c, fy_c, cx_c, cy_c = (
+        color_intrinsics[0, 0],
+        color_intrinsics[1, 1],
+        color_intrinsics[0, 2],
+        color_intrinsics[1, 2],
+    )
+
+    inv_fx_d, inv_fy_d = 1.0 / fx_d, 1.0 / fy_d
+
+    depth_color_aligned = np.zeros((h, w), dtype=np.float32)  # Initialize to 0
+
+    r11, r12, r13, t1 = (
+        transform_matrix[0, 0],
+        transform_matrix[0, 1],
+        transform_matrix[0, 2],
+        transform_matrix[0, 3],
+    )
+    r21, r22, r23, t2 = (
+        transform_matrix[1, 0],
+        transform_matrix[1, 1],
+        transform_matrix[1, 2],
+        transform_matrix[1, 3],
+    )
+    r31, r32, r33, t3 = (
+        transform_matrix[2, 0],
+        transform_matrix[2, 1],
+        transform_matrix[2, 2],
+        transform_matrix[2, 3],
+    )
+
+    min_u, min_v = w, h
+    max_u, max_v = 0, 0
+
+    # Pass 1: Compute bounding box
+    for y in prange(h):  # Outer loop parallelized
+        for x in range(w):  # Inner loop sequential
+            z = depth_meters[y, x]
+            if z <= 0:
+                continue  # Ignore invalid depth
+
+            xd = (x - cx_d) * inv_fx_d * z
+            yd = (y - cy_d) * inv_fy_d * z
+
+            # Transform to color frame
+            X = r11 * xd + r12 * yd + r13 * z + t1
+            Y = r21 * xd + r22 * yd + r23 * z + t2
+            Z = r31 * xd + r32 * yd + r33 * z + t3
+
+            if Z <= 0:
+                continue  # Ignore invalid projections
+
+            # Project to color image plane
+            u = int(X * fx_c / Z + cx_c)
+            v = int(Y * fy_c / Z + cy_c)
+
+            if 0 <= u < w and 0 <= v < h:  # Valid projection
+                min_u = min(min_u, u)
+                max_u = max(max_u, u)
+                min_v = min(min_v, v)
+                max_v = max(max_v, v)
+
+    # Pass 2: Map depth to color frame and apply bounding box
+    for y in prange(h):  # Again, only outer loop parallelized
+        for x in range(w):  # Inner loop sequential
+            z = depth_meters[y, x]
+            if z <= 0:
+                continue
+
+            xd = (x - cx_d) * inv_fx_d * z
+            yd = (y - cy_d) * inv_fy_d * z
+
+            X = r11 * xd + r12 * yd + r13 * z + t1
+            Y = r21 * xd + r22 * yd + r23 * z + t2
+            Z = r31 * xd + r32 * yd + r33 * z + t3
+
+            if Z <= 0:
+                continue
+
+            u = int(X * fx_c / Z + cx_c)
+            v = int(Y * fy_c / Z + cy_c)
+
+            if min_u <= u <= max_u and min_v <= v <= max_v:  # Inside bounding box
+                depth_color_aligned[v, u] = Z
+
+    return depth_color_aligned, fx_d, fy_d, cx_d, cy_d, h, w
+
+
+def get_transform(target_frame, source_frame):
+    tf_buffer = tf2_ros.Buffer()
+    listener = tf2_ros.TransformListener(tf_buffer)
+    rospy.sleep(3)
+
+    try:
+        trans = tf_buffer.lookup_transform(
+            target_frame, source_frame, rospy.Time(0), rospy.Duration(3.0)
+        )
+
+        # Extract translation
+        translation = trans.transform.translation
+        t = np.array([translation.x, translation.y, translation.z])
+
+        # Extract rotation (quaternion)
+        rotation = trans.transform.rotation
+        q = [rotation.x, rotation.y, rotation.z, rotation.w]
+
+        # Convert quaternion to rotation matrix
+        R = tf_trans.quaternion_matrix(q)[:3, :3]  # Extract 3x3 rotation matrix
+
+        # Construct 4x4 transformation matrix
+        depth_to_color_matrix = np.eye(4)
+        depth_to_color_matrix[:3, :3] = R
+        depth_to_color_matrix[:3, 3] = t
+
+        print(
+            "================> Depth to Color Transformation Matrix:\n",
+            depth_to_color_matrix,
+        )
+        return depth_to_color_matrix
+
+    except tf2_ros.LookupException:
+        rospy.logerr(f"Transform between {source_frame} and {target_frame} not found.")
+    except tf2_ros.ExtrapolationException:
+        rospy.logerr("TF extrapolation error.")
+    except rospy.ROSInterruptException:
+        pass
 
 
 def convert_to_pointcloud2(points, stamp, frame_id="camera_rgb_optical_frame"):
@@ -68,7 +220,7 @@ def visualize(pred, num_classes=40):
 def setup_model(cfg_file, device):
     config = OmegaConf.load(cfg_file)
     model = get_model(config.model.name, eval=True, **config.model.params)
-    checkpoint_path = "/home/sherlock/workspace/ROS/orb_slam_ws/src/semantic_cloud/include/diffusionMMS/output_dir/nyuv2/ddp_dual_dat_t_mmcv_epoch_100/checkpoint-92.pth"
+    checkpoint_path = "/home/arl/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/output_dir/nyuv2/ddp_dual_dat_t_mmcv_epoch_100/checkpoint-92.pth"
 
     model.load_state_dict(torch.load(checkpoint_path)["model"])
     model = model.to(device)
@@ -108,11 +260,6 @@ def predict(model, rgb, depth):
 
 class SemanticCloud:
     def __init__(self, seg_cfg_file):
-        # Get point type
-        # Get image size
-        self.img_width, self.img_height = rospy.get_param(
-            "/camera/width"
-        ), rospy.get_param("/camera/height")
         # Set up semantic segmentation model
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model = setup_model(seg_cfg_file, device)
@@ -129,47 +276,88 @@ class SemanticCloud:
         # Set up ros image subscriber
         # Set buff_size to average msg size to avoid accumulating delay
         # Point cloud frame id
-        self.frame_id = rospy.get_param("/semantic_pcl/frame_id")
+        self.frame_id = rospy.get_param("semantic_pcl_frame_id")
 
-        # Camera intrinsic matrix
-        self.fx = rospy.get_param("/camera/fx")
-        self.fy = rospy.get_param("/camera/fy")
-        self.cx = rospy.get_param("/camera/cx")
-        self.cy = rospy.get_param("/camera/cy")
         self.pcl_pub = rospy.Publisher(
             "/semantic_pcl/semantic_pcl", PointCloud2, queue_size=1
         )
+        camera_pose_topic = rospy.get_param("camera_pose_topic")
+        color_image_topic = rospy.get_param("color_image_topic")
+        depth_image_topic = rospy.get_param("depth_image_topic")
+
+        color_cam_info_topic = rospy.get_param("color_cam_info_topic")
+        depth_cam_info_topic = rospy.get_param("depth_cam_info_topic")
+
+        tf_color_frame = rospy.get_param("d455_color_optical_frame")
+        tf_depth_frame = rospy.get_param("d455_depth_optical_frame")
+        self.depth_to_color_transform = get_transform(
+            target_frame=tf_color_frame, source_frame=tf_depth_frame
+        )
+
+        self.depth_scale = rospy.get_param("depth_scale", 0.001)
 
         self.color_sub = message_filters.Subscriber(
-            rospy.get_param("/semantic_pcl/color_image_topic"),
+            color_image_topic,
             Image,
-            queue_size=1,
-            buff_size=30 * 480 * 640,
+            queue_size=60,
+            buff_size=30 * 480 * 848,
         )
         self.depth_sub = message_filters.Subscriber(
-            rospy.get_param("/semantic_pcl/depth_image_topic"),
+            depth_image_topic,
             Image,
-            queue_size=1,
-            buff_size=40 * 480 * 640,
+            queue_size=60,
+            buff_size=40 * 480 * 848,
         )  # increase buffer size to avoid delay (despite queue_size = 1)
-        self.pose_sub = rospy.Subscriber(
-            "/orb_slam3/camera_pose", PoseStamped, self.pose_callback
+        self.color_cam_info_sub = message_filters.Subscriber(
+            color_cam_info_topic, CameraInfo
+        )
+        self.depth_cam_info_sub = message_filters.Subscriber(
+            depth_cam_info_topic, CameraInfo
+        )
+
+        self.camera_pose = rospy.Subscriber(
+            camera_pose_topic, Odometry, self.pose_callback
         )
 
         self.ts = message_filters.ApproximateTimeSynchronizer(
-            [self.color_sub, self.depth_sub], queue_size=1, slop=0.3
-        )  # Take in one color image and one depth image with a limite time gap between message time stamps
+            [
+                self.color_sub,
+                self.depth_sub,
+                self.color_cam_info_sub,
+                self.depth_cam_info_sub,
+            ],
+            queue_size=10,
+            slop=0.05,
+        )
         self.ts.registerCallback(self.color_depth_callback)
+        self.bridge = CvBridge()
+        self.counter = 0
+
         print("Ready.")
 
     def pose_callback(self, msg):
         """Callback function to store the latest camera pose."""
         self.latest_pose = msg
 
-    def pose_to_matrix(self, pose):
-        """Convert PoseStamped to a 4x4 transformation matrix."""
-        position = pose.pose.position
-        orientation = pose.pose.orientation
+    # def pose_to_matrix(self, pose):
+    #     """Convert PoseStamped to a 4x4 transformation matrix."""
+    #     position = pose.pose.position
+    #     orientation = pose.pose.orientation
+    #     trans = np.array([position.x, position.y, position.z])
+    #     rot = np.array([orientation.x, orientation.y, orientation.z, orientation.w])
+
+    #     # Convert quaternion to rotation matrix
+    #     rotation_matrix = tf.transformations.quaternion_matrix(rot)[:3, :3]
+
+    #     # Create homogeneous transformation matrix
+    #     T = np.eye(4)
+    #     T[:3, :3] = rotation_matrix
+    #     T[:3, 3] = trans
+    #     return T
+    def pose_to_matrix(self, odom):
+        """Convert Odometry to a 4x4 transformation matrix."""
+        position = odom.pose.pose.position
+        orientation = odom.pose.pose.orientation
         trans = np.array([position.x, position.y, position.z])
         rot = np.array([orientation.x, orientation.y, orientation.z, orientation.w])
 
@@ -203,65 +391,80 @@ class SemanticCloud:
         transformed_points = [(x, y, z) for x, y, z in points_world[:3].T]
         return transformed_points
 
-    def color_depth_callback(self, color_img_ros, depth_img_ros):
+    def color_depth_callback(
+        self, color_msg, depth_msg, color_caminfo_msg, depth_caminfo_msg
+    ):
         # Convert ros Image message to numpy array
-        try:
-            color_img = self.bridge.imgmsg_to_cv2(color_img_ros, "rgb8")
-            depth_img = self.bridge.imgmsg_to_cv2(
-                depth_img_ros, desired_encoding="32FC1"
+        self.counter += 1
+        if self.counter % 60 == 0:
+            try:
+                color_img = self.bridge.imgmsg_to_cv2(color_msg, "rgb8")
+                depth_img = self.bridge.imgmsg_to_cv2(
+                    depth_msg, desired_encoding="16UC1"
+                )
+            except CvBridgeError as e:
+                print(e)
+            K_color = np.array(color_caminfo_msg.K).reshape(3, 3)
+            K_depth = np.array(depth_caminfo_msg.K).reshape(3, 3)
+            aligned_depth, fx, fy, cx, cy, img_height, img_width = depth_to_color_frame(
+                depth_img,
+                self.depth_scale,
+                K_depth,
+                K_color,
+                self.depth_to_color_transform,
             )
-        except CvBridgeError as e:
-            print(e)
 
-        semantic_pred = predict(self.model, color_img, depth_img)
-        semantic_color = visualize(semantic_pred, num_classes=40)
-        semantic_color_msg = self.bridge.cv2_to_imgmsg(semantic_color, encoding="bgr8")
-        self.sem_img_pub.publish(semantic_color_msg)
-        colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
-        colors = colors.reshape(-1, 3)
+            semantic_pred = predict(self.model, color_img, aligned_depth)
+            semantic_color = visualize(semantic_pred, num_classes=40)
+            semantic_color_msg = self.bridge.cv2_to_imgmsg(
+                semantic_color, encoding="bgr8"
+            )
+            self.sem_img_pub.publish(semantic_color_msg)
+            colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
+            colors = colors.reshape(-1, 3)
 
-        x, y = np.meshgrid(np.arange(self.img_width), np.arange(self.img_height))
-        x, y, d = x.flatten(), y.flatten(), depth_img.flatten()
-        valid_mask = ~np.isnan(d)
+            x, y = np.meshgrid(np.arange(img_width), np.arange(img_height))
+            x, y, d = x.flatten(), y.flatten(), aligned_depth.flatten()
+            valid_mask = ~np.isnan(d)
 
-        x, y, d, colors = (
-            x[valid_mask],
-            y[valid_mask],
-            d[valid_mask],
-            colors[valid_mask],
-        )
-        x = (x - self.cx) * d / self.fx
-        y = (y - self.cy) * d / self.fy
-        z = d
+            x, y, d, colors = (
+                x[valid_mask],
+                y[valid_mask],
+                d[valid_mask],
+                colors[valid_mask],
+            )
+            x = (x - cx) * d / fx
+            y = (y - cy) * d / fy
+            z = d
 
-        points = np.stack((x, y, z), axis=-1)
-        rgb_packed = np.array(
-            [
-                struct.unpack("I", struct.pack("BBBB", b, g, r, 255))[
-                    0
-                ]  # Pack RGB into 4 bytes
-                for r, g, b in colors
-            ],
-            dtype=np.uint32,
-        ).view(
-            np.float32
-        )  # Convert to float32
+            points = np.stack((x, y, z), axis=-1)
+            rgb_packed = np.array(
+                [
+                    struct.unpack("I", struct.pack("BBBB", b, g, r, 255))[
+                        0
+                    ]  # Pack RGB into 4 bytes
+                    for r, g, b in colors
+                ],
+                dtype=np.uint32,
+            ).view(
+                np.float32
+            )  # Convert to float32
 
-        # Combine XYZ and RGB
-        points = self.transform_point_cloud(points)
-        cloud_data = np.hstack((points, rgb_packed[:, np.newaxis]))  # Shape: (N, 4)
+            # Combine XYZ and RGB
+            points = self.transform_point_cloud(points)
+            cloud_data = np.hstack((points, rgb_packed[:, np.newaxis]))  # Shape: (N, 4)
 
-        cloud_ros = convert_to_pointcloud2(
-            cloud_data, stamp=color_img_ros.header.stamp, frame_id="world"
-        )
+            cloud_ros = convert_to_pointcloud2(
+                cloud_data, stamp=color_msg.header.stamp, frame_id=self.frame_id
+            )
 
-        # Publish point cloud
-        self.pcl_pub.publish(cloud_ros)
+            # Publish point cloud
+            self.pcl_pub.publish(cloud_ros)
 
 
 def main(args):
     rospy.init_node("semantic_cloud", anonymous=True)
-    cfg_file = "/home/sherlock/workspace/ROS/orb_slam_ws/src/semantic_cloud/include/diffusionMMS/config/nyuv2/standard/ddp_dual_dat_t_mmcv_epoch_100.yaml"
+    cfg_file = "/home/arl/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/config/nyuv2/standard/ddp_dual_dat_t_mmcv_epoch_100.yaml"
 
     SemanticCloud(seg_cfg_file=cfg_file)
     try:

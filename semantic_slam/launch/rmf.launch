@@ -1,0 +1,13 @@
+<launch>
+    <param name="use_sim_time" value="false" />
+    
+    <rosparam
+        file="$(find semantic_slam)/params/tum_rgbd.yaml" command="load" />
+    <node
+        pkg="semantic_cloud" type="diffusion_cloud.py" name="semantic_cloud" output="screen" />
+
+    <rosparam file="$(find semantic_slam)/params/octomap_generator.yaml" command="load"/>
+    <node pkg="octomap_generator" type="octomap_generator" name="octomap_generator" output="screen"/>
+    <!-- <node pkg="semantic_octomap" type="semantic_octomap" name="semantic_octomap" output="screen" /> -->
+
+</launch>
