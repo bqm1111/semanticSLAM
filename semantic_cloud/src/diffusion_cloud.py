@@ -87,7 +87,11 @@ def depth_to_color_frame(
     min_u, min_v = w, h
     max_u, max_v = 0, 0
 
-    # Pass 1: Compute bounding box
+    # Store transformed coordinates
+    transformed_coords = np.full((h, w, 3), np.nan, dtype=np.float32)  # Stores X, Y, Z
+    projected_coords = np.full((h, w, 2), -1, dtype=np.int32)  # Stores u, v
+
+    # Pass 1: Compute bounding box and store transformed coordinates
     for y in prange(h):  # Outer loop parallelized
         for x in range(w):  # Inner loop sequential
             z = depth_meters[y, x]
@@ -110,30 +114,25 @@ def depth_to_color_frame(
             v = int(Y * fy_c / Z + cy_c)
 
             if 0 <= u < w and 0 <= v < h:  # Valid projection
+                transformed_coords[y, x, 0] = X
+                transformed_coords[y, x, 1] = Y
+                transformed_coords[y, x, 2] = Z
+                projected_coords[y, x, 0] = u
+                projected_coords[y, x, 1] = v
+
                 min_u = min(min_u, u)
                 max_u = max(max_u, u)
                 min_v = min(min_v, v)
                 max_v = max(max_v, v)
 
-    # Pass 2: Map depth to color frame and apply bounding box
+    # Pass 2: Map depth to color frame using stored values
     for y in prange(h):  # Again, only outer loop parallelized
         for x in range(w):  # Inner loop sequential
-            z = depth_meters[y, x]
-            if z <= 0:
+            if np.isnan(transformed_coords[y, x, 0]):  # Skip invalid points
                 continue
 
-            xd = (x - cx_d) * inv_fx_d * z
-            yd = (y - cy_d) * inv_fy_d * z
-
-            X = r11 * xd + r12 * yd + r13 * z + t1
-            Y = r21 * xd + r22 * yd + r23 * z + t2
-            Z = r31 * xd + r32 * yd + r33 * z + t3
-
-            if Z <= 0:
-                continue
-
-            u = int(X * fx_c / Z + cx_c)
-            v = int(Y * fy_c / Z + cy_c)
+            X, Y, Z = transformed_coords[y, x]
+            u, v = projected_coords[y, x]
 
             if min_u <= u <= max_u and min_v <= v <= max_v:  # Inside bounding box
                 depth_color_aligned[v, u] = Z
@@ -182,25 +181,33 @@ def get_transform(target_frame, source_frame):
 
 
 def convert_to_pointcloud2(points, stamp, frame_id="camera_rgb_optical_frame"):
-    header = rospy.Header()
-    header.stamp = stamp
-    header.frame_id = frame_id  # Set the frame ID
+    # Create header
+    header = rospy.Header(stamp=stamp, frame_id=frame_id)
 
-    # Define PointField structure
-    # fields = [
-    #     PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
-    #     PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
-    #     PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
-    # ]
-    fields = [
+    # Ensure points is a NumPy array with dtype float32
+    points = np.asarray(points, dtype=np.float32)
+
+    # Faster alternative: Directly create a PointCloud2 message
+    cloud_msg = PointCloud2()
+    cloud_msg.header = header
+    cloud_msg.height = 1  # Unorganized point cloud
+    cloud_msg.width = points.shape[0]
+    cloud_msg.is_dense = True  # No NaN values
+    cloud_msg.is_bigendian = False
+
+    # Define fields
+    cloud_msg.fields = [
         PointField("x", 0, PointField.FLOAT32, 1),
         PointField("y", 4, PointField.FLOAT32, 1),
         PointField("z", 8, PointField.FLOAT32, 1),
-        PointField(name="rgb", offset=12, datatype=PointField.FLOAT32, count=1),
+        PointField("rgb", 12, PointField.FLOAT32, 1),
     ]
 
-    # Create PointCloud2 message
-    cloud_msg = pc2.create_cloud(header, fields, points)
+    cloud_msg.point_step = 16  # 4 floats (x, y, z, rgb) * 4 bytes each
+    cloud_msg.row_step = cloud_msg.point_step * cloud_msg.width
+
+    # Convert NumPy array to binary format for ROS
+    cloud_msg.data = points.tobytes()  # Efficient binary serialization
     return cloud_msg
 
 
@@ -262,8 +269,10 @@ class SemanticCloud:
     def __init__(self, seg_cfg_file):
         # Set up semantic segmentation model
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model = setup_model(seg_cfg_file, device)
-        self.model.eval()
+        self.enable_semantic = rospy.get_param("enable_semantic")
+        if self.enable_semantic:
+            self.model = setup_model(seg_cfg_file, device)
+            self.model.eval()
 
         # Set up ROS
         print("Setting up ROS...")
@@ -290,8 +299,15 @@ class SemanticCloud:
 
         tf_color_frame = rospy.get_param("d455_color_optical_frame")
         tf_depth_frame = rospy.get_param("d455_depth_optical_frame")
+        self.process_sematic_freq = rospy.get_param("process_sematic_freq")
         self.depth_to_color_transform = get_transform(
             target_frame=tf_color_frame, source_frame=tf_depth_frame
+        )
+        self.color_to_depth_transform = get_transform(
+            target_frame=tf_depth_frame, source_frame=tf_color_frame
+        )
+        self.optical_normal_convention_depth_transform = get_transform(
+            target_frame="d455_depth_frame", source_frame="d455_depth_optical_frame"
         )
 
         self.depth_scale = rospy.get_param("depth_scale", 0.001)
@@ -332,28 +348,13 @@ class SemanticCloud:
         self.ts.registerCallback(self.color_depth_callback)
         self.bridge = CvBridge()
         self.counter = 0
-
+        self.latest_pose = None
         print("Ready.")
 
     def pose_callback(self, msg):
         """Callback function to store the latest camera pose."""
         self.latest_pose = msg
 
-    # def pose_to_matrix(self, pose):
-    #     """Convert PoseStamped to a 4x4 transformation matrix."""
-    #     position = pose.pose.position
-    #     orientation = pose.pose.orientation
-    #     trans = np.array([position.x, position.y, position.z])
-    #     rot = np.array([orientation.x, orientation.y, orientation.z, orientation.w])
-
-    #     # Convert quaternion to rotation matrix
-    #     rotation_matrix = tf.transformations.quaternion_matrix(rot)[:3, :3]
-
-    #     # Create homogeneous transformation matrix
-    #     T = np.eye(4)
-    #     T[:3, :3] = rotation_matrix
-    #     T[:3, 3] = trans
-    #     return T
     def pose_to_matrix(self, odom):
         """Convert Odometry to a 4x4 transformation matrix."""
         position = odom.pose.pose.position
@@ -370,22 +371,18 @@ class SemanticCloud:
         T[:3, 3] = trans
         return T
 
-    def transform_point_cloud(self, points):
+    def transform_point_cloud(self, points, T):
         """Transform the point cloud to the world frame."""
         if self.latest_pose is None:
             rospy.logwarn("No camera pose received yet!")
             return
 
-        # Convert pose to transformation matrix
-        T_wc = self.pose_to_matrix(self.latest_pose)
-
-        # Extract points from PointCloud2 message
         points = np.hstack((points, np.ones((points.shape[0], 1))))
 
         points = np.array(points).T  # Shape (4, N)
 
         # Transform points to world frame
-        points_world = np.dot(T_wc, points)  # Shape (4, N)
+        points_world = np.dot(T, points)  # Shape (4, N)
 
         # Convert back to list of tuples
         transformed_points = [(x, y, z) for x, y, z in points_world[:3].T]
@@ -395,8 +392,13 @@ class SemanticCloud:
         self, color_msg, depth_msg, color_caminfo_msg, depth_caminfo_msg
     ):
         # Convert ros Image message to numpy array
+        import time
+
         self.counter += 1
-        if self.counter % 60 == 0:
+        if (
+            self.counter % self.process_sematic_freq == 0
+            and self.latest_pose is not None
+        ):
             try:
                 color_img = self.bridge.imgmsg_to_cv2(color_msg, "rgb8")
                 depth_img = self.bridge.imgmsg_to_cv2(
@@ -404,8 +406,11 @@ class SemanticCloud:
                 )
             except CvBridgeError as e:
                 print(e)
+
             K_color = np.array(color_caminfo_msg.K).reshape(3, 3)
             K_depth = np.array(depth_caminfo_msg.K).reshape(3, 3)
+
+            start = time.time()
             aligned_depth, fx, fy, cx, cy, img_height, img_width = depth_to_color_frame(
                 depth_img,
                 self.depth_scale,
@@ -414,18 +419,28 @@ class SemanticCloud:
                 self.depth_to_color_transform,
             )
 
-            semantic_pred = predict(self.model, color_img, aligned_depth)
-            semantic_color = visualize(semantic_pred, num_classes=40)
-            semantic_color_msg = self.bridge.cv2_to_imgmsg(
-                semantic_color, encoding="bgr8"
-            )
-            self.sem_img_pub.publish(semantic_color_msg)
-            colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
+            if self.enable_semantic:
+                semantic_pred = predict(self.model, color_img, aligned_depth)
+                semantic_color = visualize(semantic_pred, num_classes=40)
+                semantic_color_msg = self.bridge.cv2_to_imgmsg(
+                    semantic_color, encoding="bgr8"
+                )
+                self.sem_img_pub.publish(semantic_color_msg)
+                colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
+            else:
+                colors = np.ones_like(color_img) * 100
             colors = colors.reshape(-1, 3)
+            depth_meters = depth_img.astype(np.float32) * self.depth_scale
+            x, y = np.meshgrid(
+                np.arange(img_width), np.arange(img_height), indexing="xy"
+            )
 
-            x, y = np.meshgrid(np.arange(img_width), np.arange(img_height))
-            x, y, d = x.flatten(), y.flatten(), aligned_depth.flatten()
-            valid_mask = ~np.isnan(d)
+            if self.enable_semantic:
+                x, y, d = x.ravel(), y.ravel(), aligned_depth.ravel()
+            else:
+                x, y, d = x.ravel(), y.ravel(), depth_meters.ravel()
+
+            valid_mask = np.isfinite(d)
 
             x, y, d, colors = (
                 x[valid_mask],
@@ -433,26 +448,25 @@ class SemanticCloud:
                 d[valid_mask],
                 colors[valid_mask],
             )
+
             x = (x - cx) * d / fx
             y = (y - cy) * d / fy
             z = d
 
-            points = np.stack((x, y, z), axis=-1)
-            rgb_packed = np.array(
-                [
-                    struct.unpack("I", struct.pack("BBBB", b, g, r, 255))[
-                        0
-                    ]  # Pack RGB into 4 bytes
-                    for r, g, b in colors
-                ],
-                dtype=np.uint32,
-            ).view(
-                np.float32
-            )  # Convert to float32
+            points = np.column_stack((x, y, z))
+            points = self.transform_point_cloud(points, self.color_to_depth_transform)
+
+            # Efficient RGB packing
+            r, g, b = colors[:, 0], colors[:, 1], colors[:, 2]
+            rgb_packed = (
+                (r.astype(np.uint32) << 16)
+                | (g.astype(np.uint32) << 8)
+                | b.astype(np.uint32)
+            )
+            rgb_packed = rgb_packed.view(np.float32)  # Convert to float32
 
             # Combine XYZ and RGB
-            points = self.transform_point_cloud(points)
-            cloud_data = np.hstack((points, rgb_packed[:, np.newaxis]))  # Shape: (N, 4)
+            cloud_data = np.column_stack((points, rgb_packed))
 
             cloud_ros = convert_to_pointcloud2(
                 cloud_data, stamp=color_msg.header.stamp, frame_id=self.frame_id

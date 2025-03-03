@@ -1,9 +1,11 @@
 color_image_topic: "/d455/color/image_raw"
 depth_image_topic: "/d455/depth/image_rect_raw"
 color_cam_info_topic: "/d455/color/camera_info"
-depth_cam_info_topic: "d455/color/camera_info"
+depth_cam_info_topic: "/d455/depth/camera_info"
 d455_color_optical_frame: "d455_color_optical_frame"
 d455_depth_optical_frame: "d455_depth_optical_frame"
 camera_pose_topic: /rovio/odometry
 semantic_pcl_frame_id: "camera0"
+enable_semantic: False
+process_sematic_freq: 1
 depth_scale: 0.001
