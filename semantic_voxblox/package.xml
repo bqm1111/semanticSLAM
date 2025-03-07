@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="2">
-  <name>octomap_generator</name>
+  <name>semantic_voxblox</name>
   <version>1.0.0</version>
-  <description>Octomap generator</description>
+  <description>semantic voxblox</description>
 
   <maintainer email="buiquangminh1111@gmail.com">Quang Minh Bui</maintainer>
 

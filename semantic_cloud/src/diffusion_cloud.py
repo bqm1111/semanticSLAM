@@ -334,7 +334,7 @@ class SemanticCloud:
         self.camera_pose = rospy.Subscriber(
             camera_pose_topic, Odometry, self.pose_callback
         )
-
+        
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [
                 self.color_sub,
@@ -372,20 +372,9 @@ class SemanticCloud:
         return T
 
     def transform_point_cloud(self, points, T):
-        """Transform the point cloud to the world frame."""
-        if self.latest_pose is None:
-            rospy.logwarn("No camera pose received yet!")
-            return
-
-        points = np.hstack((points, np.ones((points.shape[0], 1))))
-
-        points = np.array(points).T  # Shape (4, N)
-
-        # Transform points to world frame
-        points_world = np.dot(T, points)  # Shape (4, N)
-
-        # Convert back to list of tuples
-        transformed_points = [(x, y, z) for x, y, z in points_world[:3].T]
+        ones = np.ones((points.shape[0], 1), dtype=points.dtype)
+        transformed_points = np.hstack((points, ones))  # Avoid unnecessary transposes
+        transformed_points = np.matmul(transformed_points, T.T)[:, :3]
         return transformed_points
 
     def color_depth_callback(
@@ -393,6 +382,9 @@ class SemanticCloud:
     ):
         # Convert ros Image message to numpy array
         import time
+        
+        start = time.time()
+        begin = time.time()
 
         self.counter += 1
         if (
@@ -406,11 +398,12 @@ class SemanticCloud:
                 )
             except CvBridgeError as e:
                 print(e)
+            # print("==========> Read images time = ", time.time() - start)
 
+            start = time.time()
             K_color = np.array(color_caminfo_msg.K).reshape(3, 3)
             K_depth = np.array(depth_caminfo_msg.K).reshape(3, 3)
 
-            start = time.time()
             aligned_depth, fx, fy, cx, cy, img_height, img_width = depth_to_color_frame(
                 depth_img,
                 self.depth_scale,
@@ -418,7 +411,8 @@ class SemanticCloud:
                 K_color,
                 self.depth_to_color_transform,
             )
-
+            # print("==========> Align depth to color time = ", time.time() - start)
+            start = time.time()
             if self.enable_semantic:
                 semantic_pred = predict(self.model, color_img, aligned_depth)
                 semantic_color = visualize(semantic_pred, num_classes=40)
@@ -429,6 +423,8 @@ class SemanticCloud:
                 colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
             else:
                 colors = np.ones_like(color_img) * 100
+            # print("=====================> inference time = ", time.time() - start)
+            start = time.time()
             colors = colors.reshape(-1, 3)
             depth_meters = depth_img.astype(np.float32) * self.depth_scale
             x, y = np.meshgrid(
@@ -439,8 +435,8 @@ class SemanticCloud:
                 x, y, d = x.ravel(), y.ravel(), aligned_depth.ravel()
             else:
                 x, y, d = x.ravel(), y.ravel(), depth_meters.ravel()
-
-            valid_mask = np.isfinite(d)
+            zero_count = np.sum(d == 0)
+            valid_mask = np.isfinite(d) & (d != 0)
 
             x, y, d, colors = (
                 x[valid_mask],
@@ -452,28 +448,36 @@ class SemanticCloud:
             x = (x - cx) * d / fx
             y = (y - cy) * d / fy
             z = d
-
+            
             points = np.column_stack((x, y, z))
+            # print("==========> Calculate point cloud time = ", time.time() - start)
+            start = time.time()
             points = self.transform_point_cloud(points, self.color_to_depth_transform)
+            # print("==========> Transform pointcloud time = ", time.time() - start)
+            start = time.time()
+            # Directly allocate memory for the final cloud data (avoids copies)
+            cloud_data = np.empty((points.shape[0], 4), dtype=np.float32)
 
-            # Efficient RGB packing
-            r, g, b = colors[:, 0], colors[:, 1], colors[:, 2]
-            rgb_packed = (
-                (r.astype(np.uint32) << 16)
-                | (g.astype(np.uint32) << 8)
-                | b.astype(np.uint32)
-            )
-            rgb_packed = rgb_packed.view(np.float32)  # Convert to float32
+            # Fill XYZ directly
+            cloud_data[:, :3] = points
 
-            # Combine XYZ and RGB
-            cloud_data = np.column_stack((points, rgb_packed))
-
+            # Pack RGB and store in the last column
+            cloud_data[:, 3] = (
+                (colors[:, 0].astype(np.uint32) << 16)
+                | (colors[:, 1].astype(np.uint32) << 8)
+                | colors[:, 2].astype(np.uint32)
+            ).view(np.float32)
+            # print("==========> Stack color time = ", time.time() - start)
+            start = time.time()
             cloud_ros = convert_to_pointcloud2(
                 cloud_data, stamp=color_msg.header.stamp, frame_id=self.frame_id
             )
 
+            # print("==========> Convert to message time = ", time.time() - start)
+
             # Publish point cloud
             self.pcl_pub.publish(cloud_ros)
+            # print("==========> Callback time = ", time.time() - begin)
 
 
 def main(args):

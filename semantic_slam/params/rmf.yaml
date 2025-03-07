@@ -7,5 +7,5 @@ d455_depth_optical_frame: "d455_depth_optical_frame"
 camera_pose_topic: /rovio/odometry
 semantic_pcl_frame_id: "camera0"
 enable_semantic: False
-process_sematic_freq: 1
+process_sematic_freq: 10
 depth_scale: 0.001
