@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+    <node pkg="tf2_ros" type="static_transform_publisher" name="tf_rovio_mocap" args="0 0 0 0 0 0 world map"/>
+    <node pkg="tf2_ros" type="static_transform_publisher" name="tf_mavrosmap" args="0 0 0 0 0 0 world mocap"/>
+    <node pkg="tf2_ros" type="static_transform_publisher" name="tf_imu_body" args="-0.0983 -0.0046 0.0198 0 0 0 imu base_link"/>
+    <node pkg="tf2_ros" type="static_transform_publisher" name="tf_d455_pc" args="0 0 0 0 0 0 camera0 d455_depth_optical_frame"/>
+</launch>

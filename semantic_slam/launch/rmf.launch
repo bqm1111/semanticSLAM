@@ -1,13 +1,21 @@
 <launch>
-    <param name="use_sim_time" value="false" />
-    
-    <rosparam
-        file="$(find semantic_slam)/params/tum_rgbd.yaml" command="load" />
-    <node
-        pkg="semantic_cloud" type="diffusion_cloud.py" name="semantic_cloud" output="screen" />
+    <param name="use_sim_time" value="true" />
+    <arg name="voxel_size" default="0.20" />
 
-    <rosparam file="$(find semantic_slam)/params/octomap_generator.yaml" command="load"/>
-    <node pkg="octomap_generator" type="octomap_generator" name="octomap_generator" output="screen"/>
-    <!-- <node pkg="semantic_octomap" type="semantic_octomap" name="semantic_octomap" output="screen" /> -->
+    <rosparam file="$(find semantic_slam)/params/rmf.yaml" command="load" />
+    <rosparam file="$(find semantic_slam)/params/octomap_generator.yaml" command="load" />
+    <include file="$(find semantic_slam)/launch/tf_static.launch" />
+
+    <node pkg="semantic_cloud" type="diffusion_cloud.py" name="semantic_cloud" output="screen" />
+    <node pkg="octomap_generator" type="octomap_generator" name="octomap_generator"
+        output="screen" />
+
+    <node name="voxblox_node" pkg="voxblox_ros" type="tsdf_server" output="screen"
+        args="--alsologtostderr" clear_params="true">
+        <param name="verbosity" value="5" />
+
+        <remap from="pointcloud" to="/semantic_pcl/semantic_pcl" />
+        <rosparam file="$(find voxblox_ros)/cfg/rmf.yaml" />
+    </node>
 
 </launch>

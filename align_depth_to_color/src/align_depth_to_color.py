@@ -77,7 +77,7 @@ def depth_to_color_frame(
             X = r11 * xd + r12 * yd + r13 * z + t1
             Y = r21 * xd + r22 * yd + r23 * z + t2
             Z = r31 * xd + r32 * yd + r33 * z + t3
-
+            
             if Z <= 0:
                 continue  # Ignore invalid projections
 
@@ -90,7 +90,7 @@ def depth_to_color_frame(
                 max_u = max(max_u, u)
                 min_v = min(min_v, v)
                 max_v = max(max_v, v)
-
+        
     # Pass 2: Map depth to color frame and apply bounding box
     for y in prange(h):  # Again, only outer loop parallelized
         for x in range(w):  # Inner loop sequential

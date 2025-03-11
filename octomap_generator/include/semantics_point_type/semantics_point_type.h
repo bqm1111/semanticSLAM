@@ -3,6 +3,7 @@
 // Reference http://pointclouds.org/documentation/tutorials/adding_custom_ptype.php
 #define PCL_NO_PRECOMPILE
 #include <pcl/point_types.h>
+
 struct PointXYZRGBSemanticsMax
 {
 	PCL_ADD_POINT4D; // Preferred way of adding a XYZ+padding

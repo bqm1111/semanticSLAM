@@ -10,7 +10,6 @@ from cv_bridge import CvBridge, CvBridgeError
 
 import numpy as np
 from sensor_msgs.msg import PointCloud2, CameraInfo, Image
-from color_pcl_generator import PointType, ColorPclGenerator
 from diffusionMMS.engine import get_model
 from diffusionMMS.utils.helper import (
     convert_depth_to_three_channel_img,
@@ -83,10 +82,9 @@ def depth_to_color_frame(
         transform_matrix[2, 2],
         transform_matrix[2, 3],
     )
-
     min_u, min_v = w, h
     max_u, max_v = 0, 0
-
+    # 
     # Store transformed coordinates
     transformed_coords = np.full((h, w, 3), np.nan, dtype=np.float32)  # Stores X, Y, Z
     projected_coords = np.full((h, w, 2), -1, dtype=np.int32)  # Stores u, v
@@ -227,7 +225,7 @@ def visualize(pred, num_classes=40):
 def setup_model(cfg_file, device):
     config = OmegaConf.load(cfg_file)
     model = get_model(config.model.name, eval=True, **config.model.params)
-    checkpoint_path = "/home/arl/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/output_dir/nyuv2/ddp_dual_dat_t_mmcv_epoch_100/checkpoint-92.pth"
+    checkpoint_path = "/home/sherlock/workspace/ROS/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/output_dir/nyuv2/ddp_dual_dat_t_mmcv_epoch_100/checkpoint-92.pth"
 
     model.load_state_dict(torch.load(checkpoint_path)["model"])
     model = model.to(device)
@@ -448,7 +446,7 @@ class SemanticCloud:
             x = (x - cx) * d / fx
             y = (y - cy) * d / fy
             z = d
-            
+
             points = np.column_stack((x, y, z))
             # print("==========> Calculate point cloud time = ", time.time() - start)
             start = time.time()
@@ -482,14 +480,13 @@ class SemanticCloud:
 
 def main(args):
     rospy.init_node("semantic_cloud", anonymous=True)
-    cfg_file = "/home/arl/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/config/nyuv2/standard/ddp_dual_dat_t_mmcv_epoch_100.yaml"
+    cfg_file = "/home/sherlock/workspace/ROS/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/config/nyuv2/standard/ddp_dual_dat_t_mmcv_epoch_100.yaml"
 
     SemanticCloud(seg_cfg_file=cfg_file)
     try:
         rospy.spin()
     except KeyboardInterrupt:
         print("Shutting down")
-
 
 if __name__ == "__main__":
     main(sys.argv)
