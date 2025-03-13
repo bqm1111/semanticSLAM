@@ -1,5 +1,5 @@
 /**
- * @file   semantic_voxblox_rosbag.cpp
+ * @file   kimera_semantics_rosbag.cpp
  * @brief  Main for feeding a parsed rosbag to Kimera-Semantics
  * and generate a PLY mesh and serialize a TSDF layer.
  * @author Antoni Rosinol
@@ -13,13 +13,13 @@
 #include <voxblox_ros/esdf_server.h>
 #include <voxblox_ros/tsdf_server.h>
 
-#include "semantic_voxblox_ros/depth_map_to_pointcloud.h"
-#include "semantic_voxblox_ros/rosbag_data_provider.h"
-#include "semantic_voxblox_ros/semantic_tsdf_server.h"
+#include "semantic_voxblox/kimera_semantics_ros/depth_map_to_pointcloud.h"
+#include "semantic_voxblox/kimera_semantics_ros/rosbag_data_provider.h"
+#include "semantic_voxblox/kimera_semantics_ros/semantic_tsdf_server.h"
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "semantic_voxblox");
+    ros::init(argc, argv, "kimera_semantics");
 
     google::InitGoogleLogging(argv[0]);
     google::ParseCommandLineFlags(&argc, &argv, false);

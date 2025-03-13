@@ -38,53 +38,59 @@
 #include "semantic_voxblox/semantic_tsdf_integrator_fast.h"
 #include "semantic_voxblox/semantic_tsdf_integrator_merged.h"
 
-namespace kimera {
+namespace kimera
+{
 
-std::unique_ptr<vxb::TsdfIntegratorBase>
-SemanticTsdfIntegratorFactory::create(
-    const std::string& integrator_type_name,
-    const vxb::TsdfIntegratorBase::Config& config,
-    const SemanticIntegratorBase::SemanticConfig& semantic_config,
-    vxb::Layer<vxb::TsdfVoxel>* tsdf_layer,
-    vxb::Layer<SemanticVoxel>* semantic_layer) {
-  CHECK(!integrator_type_name.empty());
+	std::unique_ptr<vxb::TsdfIntegratorBase>
+	SemanticTsdfIntegratorFactory::create(
+		const std::string &integrator_type_name,
+		const vxb::TsdfIntegratorBase::Config &config,
+		const SemanticIntegratorBase::SemanticConfig &semantic_config,
+		vxb::Layer<vxb::TsdfVoxel> *tsdf_layer,
+		vxb::Layer<SemanticVoxel> *semantic_layer)
+	{
+		CHECK(!integrator_type_name.empty());
 
-  int integrator_type = 0;
-  for (const std::string& valid_integrator_type_name :
-       kSemanticTsdfIntegratorTypeNames) {
-    if (integrator_type_name == valid_integrator_type_name) {
-      return create(static_cast<SemanticTsdfIntegratorType>(integrator_type),
-                    config, semantic_config, tsdf_layer, semantic_layer);
-    }
-    ++integrator_type;
-  }
-  LOG(FATAL) << "Unknown TSDF integrator type: " << integrator_type_name;
-  return nullptr;
-}
+		int integrator_type = 0;
+		for (const std::string &valid_integrator_type_name :
+			 kSemanticTsdfIntegratorTypeNames)
+		{
+			if (integrator_type_name == valid_integrator_type_name)
+			{
+				return create(static_cast<SemanticTsdfIntegratorType>(integrator_type),
+							  config, semantic_config, tsdf_layer, semantic_layer);
+			}
+			++integrator_type;
+		}
+		LOG(FATAL) << "Unknown TSDF integrator type: " << integrator_type_name;
+		return nullptr;
+	}
 
-std::unique_ptr<vxb::TsdfIntegratorBase>
-SemanticTsdfIntegratorFactory::create(
-    const SemanticTsdfIntegratorType& integrator_type,
-    const vxb::TsdfIntegratorBase::Config& config,
-    const SemanticIntegratorBase::SemanticConfig& semantic_config,
-    vxb::Layer<vxb::TsdfVoxel>* tsdf_layer,
-    vxb::Layer<SemanticVoxel>* semantic_layer) {
-  CHECK_NOTNULL(tsdf_layer);
-  switch (integrator_type) {
-  case SemanticTsdfIntegratorType::kFast:
-    return kimera::make_unique<FastSemanticTsdfIntegrator>(
-          config, semantic_config, tsdf_layer, semantic_layer);
-    break;
-  case SemanticTsdfIntegratorType::kMerged:
-    return kimera::make_unique<MergedSemanticTsdfIntegrator>(
-          config, semantic_config, tsdf_layer, semantic_layer);
-    break;
-  default:
-    LOG(FATAL) << "Unknown Semantic/TSDF integrator type: "
-               << static_cast<int>(integrator_type);
-    break;
-  }
-  return nullptr;
-}
+	std::unique_ptr<vxb::TsdfIntegratorBase>
+	SemanticTsdfIntegratorFactory::create(
+		const SemanticTsdfIntegratorType &integrator_type,
+		const vxb::TsdfIntegratorBase::Config &config,
+		const SemanticIntegratorBase::SemanticConfig &semantic_config,
+		vxb::Layer<vxb::TsdfVoxel> *tsdf_layer,
+		vxb::Layer<SemanticVoxel> *semantic_layer)
+	{
+		CHECK_NOTNULL(tsdf_layer);
+		switch (integrator_type)
+		{
+		case SemanticTsdfIntegratorType::kFast:
+			return kimera::make_unique<FastSemanticTsdfIntegrator>(
+				config, semantic_config, tsdf_layer, semantic_layer);
+			break;
+		case SemanticTsdfIntegratorType::kMerged:
+			return kimera::make_unique<MergedSemanticTsdfIntegrator>(
+				config, semantic_config, tsdf_layer, semantic_layer);
+			break;
+		default:
+			LOG(FATAL) << "Unknown Semantic/TSDF integrator type: "
+					   << static_cast<int>(integrator_type);
+			break;
+		}
+		return nullptr;
+	}
 
-}  // Namespace kimera
+} // Namespace kimera

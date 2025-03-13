@@ -45,78 +45,80 @@
 #include "semantic_voxblox/semantic_voxel.h"
 #include "semantic_voxblox/semantic_integrator_base.h"
 
-namespace kimera {
+namespace kimera
+{
 
-/**
- * Semantic TSDF integrator.
- * Uses ray bundling to improve integration speed, points which lie in the same
- * voxel are "merged" into a single point. Raycasting and updating then proceeds
- * as normal. Fast for large voxels, with minimal loss of information.
- */
-class MergedSemanticTsdfIntegrator : public vxb::MergedTsdfIntegrator,
-                                     public SemanticIntegratorBase {
- public:
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    /**
+     * Semantic TSDF integrator.
+     * Uses ray bundling to improve integration speed, points which lie in the same
+     * voxel are "merged" into a single point. Raycasting and updating then proceeds
+     * as normal. Fast for large voxels, with minimal loss of information.
+     */
+    class MergedSemanticTsdfIntegrator : public vxb::MergedTsdfIntegrator,
+                                         public SemanticIntegratorBase
+    {
+    public:
+        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-  typedef vxb::LongIndexHashMapType<vxb::AlignedVector<size_t>>::type VoxelMap;
-  typedef VoxelMap::value_type VoxelMapElement;
+        typedef vxb::LongIndexHashMapType<vxb::AlignedVector<size_t>>::type VoxelMap;
+        typedef VoxelMap::value_type VoxelMapElement;
 
-  MergedSemanticTsdfIntegrator(const Config& config,
-                         const SemanticConfig& semantic_config,
-                         vxb::Layer<vxb::TsdfVoxel>* tsdf_layer,
-                         vxb::Layer<SemanticVoxel>* semantic_layer);
-  virtual ~MergedSemanticTsdfIntegrator() = default;
+        MergedSemanticTsdfIntegrator(const Config &config,
+                                     const SemanticConfig &semantic_config,
+                                     vxb::Layer<vxb::TsdfVoxel> *tsdf_layer,
+                                     vxb::Layer<SemanticVoxel> *semantic_layer);
+        virtual ~MergedSemanticTsdfIntegrator() = default;
 
-  virtual void integratePointCloud(const vxb::Transformation& T_G_C,
-                                   const vxb::Pointcloud& points_C,
-                                   const vxb::Colors& colors,
-                                   const bool freespace_points = false) override;
+        virtual void integratePointCloud(const vxb::Transformation &T_G_C,
+                                         const vxb::Pointcloud &points_C,
+                                         const vxb::Colors &colors,
+                                         const bool freespace_points = false) override;
 
-  // Use if you don't have labels, but the info is encoded in colors.
-  // Otw, use integratePointCloud directly with semantic labels.
-  void integratePointCloud(const vxb::Transformation& T_G_C,
-                           const vxb::Pointcloud& points_C,
-                           const HashableColors& colors,
-                           const bool freespace_points = false);
+        // Use if you don't have labels, but the info is encoded in colors.
+        // Otw, use integratePointCloud directly with semantic labels.
+        void integratePointCloud(const vxb::Transformation &T_G_C,
+                                 const vxb::Pointcloud &points_C,
+                                 const HashableColors &colors,
+                                 const bool freespace_points = false);
 
-  void integratePointCloud(const vxb::Transformation& T_G_C,
-                           const vxb::Pointcloud& points_C,
-                           const HashableColors& colors,
-                           const SemanticLabels& semantic_labels,
-                           const bool freespace_points = false);
+        void integratePointCloud(const vxb::Transformation &T_G_C,
+                                 const vxb::Pointcloud &points_C,
+                                 const HashableColors &colors,
+                                 const SemanticLabels &semantic_labels,
+                                 const bool freespace_points = false);
 
- protected:
-  void integrateRays(const vxb::Transformation& T_G_C,
-                     const vxb::Pointcloud& points_C,
-                     const HashableColors& colors,
-                     const SemanticLabels& semantic_labels,
-                     const bool enable_anti_grazing,
-                     const bool clearing_ray,
-                     const VoxelMap& voxel_map,
-                     const VoxelMap& clear_map);
+    protected:
+        void integrateRays(const vxb::Transformation &T_G_C,
+                           const vxb::Pointcloud &points_C,
+                           const HashableColors &colors,
+                           const SemanticLabels &semantic_labels,
+                           const bool enable_anti_grazing,
+                           const bool clearing_ray,
+                           const VoxelMap &voxel_map,
+                           const VoxelMap &clear_map);
 
-  // NEEDS TO BE THREAD-SAFE
-  void integrateVoxels(const vxb::Transformation& T_G_C,
-                       const vxb::Pointcloud& points_C,
-                       const HashableColors& colors,
-                       const SemanticLabels& semantic_labels,
-                       const bool enable_anti_grazing,
-                       const bool clearing_ray,
-                       const VoxelMap& voxel_map,
-                       const VoxelMap& clear_map,
-                       const size_t thread_idx);
+        // NEEDS TO BE THREAD-SAFE
+        void integrateVoxels(const vxb::Transformation &T_G_C,
+                             const vxb::Pointcloud &points_C,
+                             const HashableColors &colors,
+                             const SemanticLabels &semantic_labels,
+                             const bool enable_anti_grazing,
+                             const bool clearing_ray,
+                             const VoxelMap &voxel_map,
+                             const VoxelMap &clear_map,
+                             const size_t thread_idx);
 
-  // HAS TO BE THREADSAFE!!!
-  void integrateVoxel(const vxb::Transformation& T_G_C,
-                      const vxb::Pointcloud& points_C,
-                      const HashableColors& colors,
-                      const SemanticLabels& semantic_labels,
-                      const bool enable_anti_grazing,
-                      const bool clearing_ray,
-                      const VoxelMapElement& global_voxel_idx_to_point_indices,
-                      const VoxelMap& voxel_map);
+        // HAS TO BE THREADSAFE!!!
+        void integrateVoxel(const vxb::Transformation &T_G_C,
+                            const vxb::Pointcloud &points_C,
+                            const HashableColors &colors,
+                            const SemanticLabels &semantic_labels,
+                            const bool enable_anti_grazing,
+                            const bool clearing_ray,
+                            const VoxelMapElement &global_voxel_idx_to_point_indices,
+                            const VoxelMap &voxel_map);
 
- private:
-};
+    private:
+    };
 
-}  // Namespace kimera
+} // Namespace kimera

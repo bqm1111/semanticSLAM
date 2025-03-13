@@ -43,60 +43,62 @@
 
 #include "semantic_voxblox/semantic_integrator_base.h"
 
-namespace kimera {
+namespace kimera
+{
 
-//! Implemented types of semantic integrators.
-enum class SemanticTsdfIntegratorType : int {
-  kMerged = 0,
-  kFast = 1,
-};
-const std::array<std::string, 2>
-kSemanticTsdfIntegratorTypeNames = {{/*kMerged*/ "merged", /*kFast*/ "fast"}};
+  //! Implemented types of semantic integrators.
+  enum class SemanticTsdfIntegratorType : int
+  {
+    kMerged = 0,
+    kFast = 1,
+  };
+  const std::array<std::string, 2>
+      kSemanticTsdfIntegratorTypeNames = {{/*kMerged*/ "merged", /*kFast*/ "fast"}};
 
-/// Creates a Semantic/TSDF integrator of the desired type.
-class SemanticTsdfIntegratorFactory {
-public:
-  /**
-   * @brief create an instance of a SemanticTsdfIntegrator which is casted to
-   * the base class TsdfIntegratorBase for usage in a TsdfServer as if it was a
-   * simple TsdfIntegrator
-   * @param integrator_type_name type of integrator as specified in
-   * kSemanticTsdfIntegratorTypeNames ("merged", "fast", ...)
-   * @param config configuration for the TSDF integrator
-   * @param semantic_config configuration for the Semantic integrator
-   * @param tsdf_layer layer for the TSDF integrator
-   * @param semantic_layer layer for the Semantic integrator
-   * @return
-   */
-  static std::unique_ptr<vxb::TsdfIntegratorBase> create(
-      const std::string& integrator_type_name,
-      const vxb::TsdfIntegratorBase::Config& config,
-      const SemanticIntegratorBase::SemanticConfig& semantic_config,
-      vxb::Layer<vxb::TsdfVoxel>* tsdf_layer,
-      vxb::Layer<SemanticVoxel>* semantic_layer);
+  /// Creates a Semantic/TSDF integrator of the desired type.
+  class SemanticTsdfIntegratorFactory
+  {
+  public:
+    /**
+     * @brief create an instance of a SemanticTsdfIntegrator which is casted to
+     * the base class TsdfIntegratorBase for usage in a TsdfServer as if it was a
+     * simple TsdfIntegrator
+     * @param integrator_type_name type of integrator as specified in
+     * kSemanticTsdfIntegratorTypeNames ("merged", "fast", ...)
+     * @param config configuration for the TSDF integrator
+     * @param semantic_config configuration for the Semantic integrator
+     * @param tsdf_layer layer for the TSDF integrator
+     * @param semantic_layer layer for the Semantic integrator
+     * @return
+     */
+    static std::unique_ptr<vxb::TsdfIntegratorBase> create(
+        const std::string &integrator_type_name,
+        const vxb::TsdfIntegratorBase::Config &config,
+        const SemanticIntegratorBase::SemanticConfig &semantic_config,
+        vxb::Layer<vxb::TsdfVoxel> *tsdf_layer,
+        vxb::Layer<SemanticVoxel> *semantic_layer);
 
-  /**
-   * @brief create same as `create` above but using enum for integrator_type.
-   * @param integrator_type type of integrator as specified in the enum
-   * SemanticTsdfIntegratorType ("merged", "fast", ...)
-   * @param config configuration for the TSDF integrator
-   * @param semantic_config configuration for the Semantic integrator
-   * @param tsdf_layer layer for the TSDF integrator
-   * @param semantic_layer layer for the Semantic integrator
-   * @return
-   */
-  static std::unique_ptr<vxb::TsdfIntegratorBase> create(
-      const SemanticTsdfIntegratorType& integrator_type,
-      const vxb::TsdfIntegratorBase::Config& config,
-      const SemanticIntegratorBase::SemanticConfig& semantic_config,
-      vxb::Layer<vxb::TsdfVoxel>* tsdf_layer,
-      vxb::Layer<SemanticVoxel>* semantic_layer);
+    /**
+     * @brief create same as `create` above but using enum for integrator_type.
+     * @param integrator_type type of integrator as specified in the enum
+     * SemanticTsdfIntegratorType ("merged", "fast", ...)
+     * @param config configuration for the TSDF integrator
+     * @param semantic_config configuration for the Semantic integrator
+     * @param tsdf_layer layer for the TSDF integrator
+     * @param semantic_layer layer for the Semantic integrator
+     * @return
+     */
+    static std::unique_ptr<vxb::TsdfIntegratorBase> create(
+        const SemanticTsdfIntegratorType &integrator_type,
+        const vxb::TsdfIntegratorBase::Config &config,
+        const SemanticIntegratorBase::SemanticConfig &semantic_config,
+        vxb::Layer<vxb::TsdfVoxel> *tsdf_layer,
+        vxb::Layer<SemanticVoxel> *semantic_layer);
 
-private:
-  /// Factories should be singletons, or rather, non instantiable objects.
-  SemanticTsdfIntegratorFactory() = default;
-  virtual ~SemanticTsdfIntegratorFactory() = default;
+  private:
+    /// Factories should be singletons, or rather, non instantiable objects.
+    SemanticTsdfIntegratorFactory() = default;
+    virtual ~SemanticTsdfIntegratorFactory() = default;
+  };
 
-};
-
-}  // Namespace kimera
+} // Namespace kimera
