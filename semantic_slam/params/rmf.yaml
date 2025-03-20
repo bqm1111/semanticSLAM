@@ -9,3 +9,4 @@ semantic_pcl_frame_id: "camera0"
 enable_semantic: True
 process_sematic_freq: 10
 depth_scale: 0.001
+selected_semantic: ["all"]

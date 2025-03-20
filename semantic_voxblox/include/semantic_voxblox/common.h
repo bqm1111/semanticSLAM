@@ -18,7 +18,7 @@
  typedef vxb::AlignedVector<SemanticLabel> SemanticLabels;
  // Consider id 0 to be the `unknown' label, for which we don't update the
  // log-likelihood for that measurement.
- static constexpr uint8_t kUnknownSemanticLabelId = 0u;
+ static constexpr uint8_t kUnknownSemanticLabelId = 100u;
  // The size of this array determines how many semantic labels SemanticVoxblox
  // supports.
  // TODO(Toni): parametrize this, although that means it becomes unknown at

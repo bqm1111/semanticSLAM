@@ -82,6 +82,7 @@ namespace kimera
 
 			const vxb::Point origin = T_G_C.getPosition();
 			const vxb::Point point_G = T_G_C * point_C;
+
 			// Checks to see if another ray in this scan has already started 'close'
 			// to this location. If it has then we skip ray casting this point. We
 			// measure if a start location is 'close' to another points by inserting
@@ -94,7 +95,7 @@ namespace kimera
 			{
 				continue;
 			}
-
+			//
 			static constexpr bool cast_from_origin = false;
 			vxb::RayCaster ray_caster(origin,
 									  point_G,
@@ -111,6 +112,7 @@ namespace kimera
 			vxb::BlockIndex block_idx;
 			vxb::Block<SemanticVoxel>::Ptr semantic_block = nullptr;
 			vxb::BlockIndex semantic_block_idx;
+
 			while (ray_caster.nextRayIndex(&global_voxel_idx))
 			{
 				// Check if the current voxel has been seen by any ray cast this scan.
@@ -186,6 +188,7 @@ namespace kimera
 											 points_C));
 
 		std::list<std::thread> integration_threads;
+
 		for (size_t i = 0; i < config_.integrator_threads; ++i)
 		{
 			integration_threads.emplace_back(
@@ -198,7 +201,6 @@ namespace kimera
 				freespace_points,
 				index_getter.get());
 		}
-
 		for (std::thread &thread : integration_threads)
 		{
 			thread.join();

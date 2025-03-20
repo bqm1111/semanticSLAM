@@ -44,38 +44,41 @@
 
 #include "semantic_voxblox/kimera_semantics_ros/ros_params.h"
 
-namespace kimera {
+namespace kimera
+{
+	SemanticTsdfServer::SemanticTsdfServer(const ros::NodeHandle &nh,
+										   const ros::NodeHandle &nh_private)
+		: SemanticTsdfServer(nh,
+							 nh_private,
+							 vxb::getTsdfMapConfigFromRosParam(nh_private),
+							 vxb::getTsdfIntegratorConfigFromRosParam(nh_private),
+							 vxb::getMeshIntegratorConfigFromRosParam(nh_private))
+	{
+	}
+	
+	SemanticTsdfServer::SemanticTsdfServer(
+		const ros::NodeHandle &nh,
+		const ros::NodeHandle &nh_private,
+		const vxb::TsdfMap::Config &config,
+		const vxb::TsdfIntegratorBase::Config &integrator_config,
+		const vxb::MeshIntegratorConfig &mesh_config)
+		: vxb::TsdfServer(nh, nh_private, config, integrator_config, mesh_config),
+		  semantic_config_(getSemanticTsdfIntegratorConfigFromRosParam(nh_private)),
+		  semantic_layer_(nullptr)
+	{
+		/// Semantic layer
+		semantic_layer_.reset(new vxb::Layer<SemanticVoxel>(
+			config.tsdf_voxel_size, config.tsdf_voxels_per_side));
+		/// Replace the TSDF integrator by the SemanticTsdfIntegrator
+		tsdf_integrator_ =
+			SemanticTsdfIntegratorFactory::create(
+				getSemanticTsdfIntegratorTypeFromRosParam(nh_private),
+				integrator_config,
+				semantic_config_,
+				tsdf_map_->getTsdfLayerPtr(),
+				semantic_layer_.get());
+		CHECK(tsdf_integrator_);
+		std::cout << "Semantic pointcloud topic = " << pointcloud_sub_.getTopic() << std::endl;
+	}
 
-SemanticTsdfServer::SemanticTsdfServer(const ros::NodeHandle& nh,
-                                       const ros::NodeHandle& nh_private)
-    : SemanticTsdfServer(nh,
-                         nh_private,
-                         vxb::getTsdfMapConfigFromRosParam(nh_private),
-                         vxb::getTsdfIntegratorConfigFromRosParam(nh_private),
-                         vxb::getMeshIntegratorConfigFromRosParam(nh_private)) {
-}
-
-SemanticTsdfServer::SemanticTsdfServer(
-    const ros::NodeHandle& nh,
-    const ros::NodeHandle& nh_private,
-    const vxb::TsdfMap::Config& config,
-    const vxb::TsdfIntegratorBase::Config& integrator_config,
-    const vxb::MeshIntegratorConfig& mesh_config)
-    : vxb::TsdfServer(nh, nh_private, config, integrator_config, mesh_config),
-      semantic_config_(getSemanticTsdfIntegratorConfigFromRosParam(nh_private)),
-      semantic_layer_(nullptr) {
-  /// Semantic layer
-  semantic_layer_.reset(new vxb::Layer<SemanticVoxel>(
-      config.tsdf_voxel_size, config.tsdf_voxels_per_side));
-  /// Replace the TSDF integrator by the SemanticTsdfIntegrator
-  tsdf_integrator_ =
-      SemanticTsdfIntegratorFactory::create(
-        getSemanticTsdfIntegratorTypeFromRosParam(nh_private),
-        integrator_config,
-        semantic_config_,
-        tsdf_map_->getTsdfLayerPtr(),
-        semantic_layer_.get());
-  CHECK(tsdf_integrator_);
-}
-
-}  // Namespace kimera
+} // Namespace kimera

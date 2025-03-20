@@ -34,7 +34,46 @@ import numpy as np
 import cv2
 from numba import njit, prange
 
-
+SEMANTIC_CLASSES_NAMES = ["wall",
+            "floor",
+            "cabinet",
+            "bed",
+            "chair",
+            "sofa",
+            "table",
+            "door",
+            "window",
+            "bookshelf",
+            "picture",
+            "counter",
+            "blinds",
+            "desk",
+            "shelves",
+            "curtain",
+            "dresser",
+            "pillow",
+            "mirror",
+            "floor mat",
+            "clothes",
+            "ceiling",
+            "books",
+            "refridgerator",
+            "television",
+            "paper",
+            "towel",
+            "shower curtain",
+            "box",
+            "whiteboard",
+            "person",
+            "night stand",
+            "toilet",
+            "sink",
+            "lamp",
+            "bathtub",
+            "bag",
+            "otherstructure",
+            "otherfurniture",
+            "otherprop"]
 @njit(fastmath=True, parallel=True)
 def depth_to_color_frame(
     depth_image_raw, depth_scale, depth_intrinsics, color_intrinsics, transform_matrix
@@ -164,10 +203,6 @@ def get_transform(target_frame, source_frame):
         depth_to_color_matrix[:3, :3] = R
         depth_to_color_matrix[:3, 3] = t
 
-        print(
-            "================> Depth to Color Transformation Matrix:\n",
-            depth_to_color_matrix,
-        )
         return depth_to_color_matrix
 
     except tf2_ros.LookupException:
@@ -177,6 +212,43 @@ def get_transform(target_frame, source_frame):
     except rospy.ROSInterruptException:
         pass
 
+# def convert_to_pointcloud2(points, stamp, frame_id="camera_rgb_optical_frame"):
+#     # Create header
+#     header = rospy.Header(stamp=stamp, frame_id=frame_id)
+
+#     # Ensure points is a NumPy array with dtype float32
+#     points = np.asarray(points, dtype=np.float32)
+    
+#     # Create RGBA field efficiently
+#     rgba = np.zeros(points.shape[0], dtype=np.uint32)
+#     rgba[:] = 255 << 24 | (points[:, 3].astype(np.uint8))  # Pack RGBA with alpha 255
+#     rgba = rgba.view(np.float32)  # Convert to float32 for ROS format
+    
+#     # Concatenate x, y, z, and rgba
+#     points_with_rgba = np.column_stack((points[:, :3], rgba))
+
+#     # Create PointCloud2 message
+#     cloud_msg = PointCloud2()
+#     cloud_msg.header = header
+#     cloud_msg.height = 1  # Unorganized point cloud
+#     cloud_msg.width = points_with_rgba.shape[0]
+#     cloud_msg.is_dense = True  # No NaN values
+#     cloud_msg.is_bigendian = False
+
+#     # Define fields
+#     cloud_msg.fields = [
+#         PointField("x", 0, PointField.FLOAT32, 1),
+#         PointField("y", 4, PointField.FLOAT32, 1),
+#         PointField("z", 8, PointField.FLOAT32, 1),
+#         PointField("rgba", 12, PointField.FLOAT32, 1),
+#     ]
+
+#     cloud_msg.point_step = 16  # 4 floats (x, y, z, rgba) * 4 bytes each
+#     cloud_msg.row_step = cloud_msg.point_step * cloud_msg.width
+
+#     # Convert NumPy array to binary format for ROS
+#     cloud_msg.data = points_with_rgba.tobytes()
+#     return cloud_msg
 
 def convert_to_pointcloud2(points, stamp, frame_id="camera_rgb_optical_frame"):
     # Create header
@@ -219,13 +291,13 @@ def visualize(pred, num_classes=40):
     colored_pred = np.stack((colored_pred,) * 3, axis=-1)
     colored_pred[:] = colors[pred_arr[:]]
 
-    return colored_pred
+    return colored_pred, np.array(pred_arr)
 
 
-def setup_model(cfg_file, device):
+def setup_model(cfg_file, device, ckpt_path):
     config = OmegaConf.load(cfg_file)
     model = get_model(config.model.name, eval=True, **config.model.params)
-    checkpoint_path = "/home/sherlock/workspace/ROS/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/output_dir/nyuv2/ddp_dual_dat_t_mmcv_epoch_100/checkpoint-92.pth"
+    checkpoint_path = ckpt_path
 
     model.load_state_dict(torch.load(checkpoint_path)["model"])
     model = model.to(device)
@@ -268,8 +340,16 @@ class SemanticCloud:
         # Set up semantic segmentation model
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.enable_semantic = rospy.get_param("enable_semantic")
+        self.selected_semantic = rospy.get_param("selected_semantic")
+        if "all" not in self.selected_semantic:
+            index_map = {val: idx for idx, val in enumerate(SEMANTIC_CLASSES_NAMES)}
+            self.semantic_index_map = np.array([index_map[val] for val in self.selected_semantic])
+        else:
+            self.semantic_index_map = None
+
         if self.enable_semantic:
-            self.model = setup_model(seg_cfg_file, device)
+            ckpt_path = rospy.get_param("semseg_model_ckpt")
+            self.model = setup_model(seg_cfg_file, device, ckpt_path)
             self.model.eval()
 
         # Set up ROS
@@ -374,7 +454,6 @@ class SemanticCloud:
         transformed_points = np.hstack((points, ones))  # Avoid unnecessary transposes
         transformed_points = np.matmul(transformed_points, T.T)[:, :3]
         return transformed_points
-
     def color_depth_callback(
         self, color_msg, depth_msg, color_caminfo_msg, depth_caminfo_msg
     ):
@@ -413,7 +492,7 @@ class SemanticCloud:
             start = time.time()
             if self.enable_semantic:
                 semantic_pred = predict(self.model, color_img, aligned_depth)
-                semantic_color = visualize(semantic_pred, num_classes=40)
+                semantic_color, pred_arr = visualize(semantic_pred, num_classes=40)
                 semantic_color_msg = self.bridge.cv2_to_imgmsg(
                     semantic_color, encoding="bgr8"
                 )
@@ -430,11 +509,14 @@ class SemanticCloud:
             )
 
             if self.enable_semantic:
-                x, y, d = x.ravel(), y.ravel(), aligned_depth.ravel()
+                x, y, d, pred_arr = x.ravel(), y.ravel(), aligned_depth.ravel(), pred_arr.ravel()
             else:
-                x, y, d = x.ravel(), y.ravel(), depth_meters.ravel()
-            zero_count = np.sum(d == 0)
-            valid_mask = np.isfinite(d) & (d != 0)
+                x, y, d, pred_arr = x.ravel(), y.ravel(), depth_meters.ravel(), pred_arr.ravel()
+            if self.semantic_index_map is not None:
+                valid_mask = np.isfinite(d) & (d != 0) & (np.isin(pred_arr, self.semantic_index_map))
+            else:
+                valid_mask = np.isfinite(d) & (d != 0)
+
 
             x, y, d, colors = (
                 x[valid_mask],
@@ -480,8 +562,7 @@ class SemanticCloud:
 
 def main(args):
     rospy.init_node("semantic_cloud", anonymous=True)
-    cfg_file = "/home/sherlock/workspace/ROS/semanticSLAM_ws/src/semanticSLAM/semantic_cloud/include/diffusionMMS/config/nyuv2/standard/ddp_dual_dat_t_mmcv_epoch_100.yaml"
-
+    cfg_file = rospy.get_param("semseg_model_cfg")
     SemanticCloud(seg_cfg_file=cfg_file)
     try:
         rospy.spin()

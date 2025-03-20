@@ -1,0 +1,35 @@
+<launch>
+    <param name="use_sim_time" value="true" />
+    <arg name="semantic_label_2_color_csv_filepath" default="$(find semantic_slam)/params/nyu.csv" />
+
+    <rosparam file="$(find semantic_slam)/params/rmf.yaml" command="load" />
+    <rosparam file="$(find semantic_slam)/params/octomap_generator.yaml" command="load" />
+    <include file="$(find semantic_slam)/launch/tf_static.launch" />
+    <arg name="semantic_pointcloud" default="/semantic_pcl/semantic_pcl" />
+    <arg name="semseg_model_ckpt"
+        default="$(find semantic_cloud)/include/diffusionMMS/output_dir/nyuv2/ddp_dual_dat_t_mmcv_epoch_100/checkpoint-92.pth" />
+    <arg name="semseg_model_cfg"
+        default="$(find semantic_cloud)/include/diffusionMMS/config/nyuv2/standard/ddp_dual_dat_t_mmcv_epoch_100.yaml" />
+
+    <param name="semseg_model_cfg" value="$(arg semseg_model_cfg)" />
+    <param name="semseg_model_ckpt" value="$(arg semseg_model_ckpt)" />
+
+    <node pkg="semantic_cloud" type="diffusion_cloud.py"
+        name="semantic_cloud" output="screen" />
+    <!-- <node pkg="octomap_generator" type="octomap_generator" name="octomap_generator"
+        output="screen" /> -->
+
+    <node name="semantic_voxblox" pkg="semantic_voxblox"
+        type="semantic_voxblox"
+        output="screen"
+        args="-alsologtostderr -colorlogtostderr" clear_params="true">
+        <remap from="pointcloud" to="$(arg semantic_pointcloud)" />
+        <rosparam file="$(find semantic_slam)/params/voxblox_cfg.yaml" />
+        <rosparam param="dynamic_semantic_labels">[20]</rosparam>
+        <param name="icp_iterations" value="10" />
+        <param name="semantic_color_mode" value="semantic" />
+        <param name="semantic_measurement_probability" value="0.8" />
+        <param name="semantic_label_2_color_csv_filepath"
+            value="$(arg semantic_label_2_color_csv_filepath)" />
+    </node>
+</launch>
