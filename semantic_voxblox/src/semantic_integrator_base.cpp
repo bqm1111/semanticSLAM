@@ -148,12 +148,12 @@ namespace kimera
 		DCHECK(mutexes != nullptr);
 		DCHECK(tsdf_voxel != nullptr);
 		DCHECK(semantic_voxel != nullptr);
-
+		// 
 		// TODO(Toni): ideally, only lock once in updateTsdfVoxel, but we need to
 		// modify Voxblox for that.
 		// Lookup the mutex that is responsible for this voxel and lock it
 		std::lock_guard<std::mutex> lock(mutexes->get(global_voxel_idx));
-
+				
 		// TODO(Toni): ideally, return new_sdf from updateTsdfVoxel, but we need to
 		// modify Voxblox for that.
 		// Similar to color blending in Voxblox tsdf_integrator.cc,
@@ -309,7 +309,7 @@ namespace kimera
 		DCHECK_GE(measurement_frequencies.sum(), 1.0)
 			<< "We should at least have one measurement when calling this "
 			   "function.";
-
+		
 		// Check prior is normalized!
 		// static constexpr bool kDebug = true;
 		// if (kDebug) {

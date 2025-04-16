@@ -33,16 +33,13 @@
  * @brief  Semantic TSDF Server to interface with ROS
  * @author Antoni Rosinol
  */
-
+#include <ros/ros.h>
 #include "semantic_voxblox/kimera_semantics_ros/semantic_tsdf_server.h"
-
 #include <glog/logging.h>
-
 #include <voxblox_ros/ros_params.h>
-
 #include <semantic_voxblox/semantic_tsdf_integrator_factory.h>
-
 #include "semantic_voxblox/kimera_semantics_ros/ros_params.h"
+#include <rosconsole/macros_generated.h>
 
 namespace kimera
 {
@@ -55,7 +52,6 @@ namespace kimera
 							 vxb::getMeshIntegratorConfigFromRosParam(nh_private))
 	{
 	}
-	
 	SemanticTsdfServer::SemanticTsdfServer(
 		const ros::NodeHandle &nh,
 		const ros::NodeHandle &nh_private,
@@ -66,6 +62,12 @@ namespace kimera
 		  semantic_config_(getSemanticTsdfIntegratorConfigFromRosParam(nh_private)),
 		  semantic_layer_(nullptr)
 	{
+		semantic_pointcloud_sub_.subscribe(nh_, "semantic_pcl/semantic_pcl", 1);
+		camera_pose_sub_.subscribe(nh_, "semantic_pcl/camera_pose", 1);
+		sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(10), semantic_pointcloud_sub_, camera_pose_sub_);
+
+		sync_->registerCallback(boost::bind(&SemanticTsdfServer::insertPointcloud, this, _1, _2));
+
 		/// Semantic layer
 		semantic_layer_.reset(new vxb::Layer<SemanticVoxel>(
 			config.tsdf_voxel_size, config.tsdf_voxels_per_side));
@@ -78,7 +80,40 @@ namespace kimera
 				tsdf_map_->getTsdfLayerPtr(),
 				semantic_layer_.get());
 		CHECK(tsdf_integrator_);
-		std::cout << "Semantic pointcloud topic = " << pointcloud_sub_.getTopic() << std::endl;
 	}
 
+	voxblox::Transformation SemanticTsdfServer::odomMsgToVoxbloxTransform(const geometry_msgs::TransformStamped &tf_msg)
+	{
+		Eigen::Quaternion<float> rotation_f;
+		Eigen::Vector3d position_d;
+		Eigen::Vector3f position_f;
+		
+		// Convert ROS message to kindr-compatible data
+		tf::quaternionMsgToKindr(tf_msg.transform.rotation, &rotation_f);
+		tf::vectorMsgToKindr(tf_msg.transform.translation, &position_d);
+
+		// Cast position to float
+		position_f = position_d.cast<float>();
+
+		// Step 2: Create voxblox::Transformation
+		voxblox::Transformation T_G_C(rotation_f, position_f);
+		return T_G_C;
+	}
+
+	void SemanticTsdfServer::insertPointcloud(const sensor_msgs::PointCloud2::ConstPtr &pointcloud_msg_in, const geometry_msgs::TransformStamped::ConstPtr &camera_pose_msg)
+	{
+		voxblox::Transformation T_G_C;
+		T_G_C = odomMsgToVoxbloxTransform(*camera_pose_msg);
+		constexpr bool is_freespace_pointcloud = false;
+
+		sensor_msgs::PointCloud2::Ptr pointcloud_msg(new sensor_msgs::PointCloud2(*pointcloud_msg_in));
+
+		processPointCloudMessageAndInsert(pointcloud_msg, T_G_C,
+										  is_freespace_pointcloud);
+
+		if (publish_pointclouds_on_update_)
+		{
+			publishPointclouds();
+		}
+	}
 } // Namespace kimera

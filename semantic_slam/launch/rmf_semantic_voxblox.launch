@@ -23,7 +23,7 @@
         type="semantic_voxblox"
         output="screen"
         args="-alsologtostderr -colorlogtostderr" clear_params="true">
-        <remap from="pointcloud" to="$(arg semantic_pointcloud)" />
+        <!-- <remap from="pointcloud" to="$(arg semantic_pointcloud)" /> -->
         <rosparam file="$(find semantic_slam)/params/voxblox_cfg.yaml" />
         <rosparam param="dynamic_semantic_labels">[20]</rosparam>
         <param name="icp_iterations" value="10" />

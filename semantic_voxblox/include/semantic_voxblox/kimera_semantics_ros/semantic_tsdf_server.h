@@ -41,6 +41,17 @@
 
 #include "semantic_voxblox/semantic_voxel.h"
 #include "semantic_voxblox/semantic_integrator_base.h"
+#include <nav_msgs/Odometry.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/TransformStamped.h>
+#include <voxblox/core/common.h>
+#include <message_filters/subscriber.h>
+#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/synchronizer.h>
+#include <message_filters/time_synchronizer.h>
+#include <minkindr_conversions/kindr_msg.h>
+#include <minkindr_conversions/kindr_tf.h>
+#include <minkindr_conversions/kindr_msg.h>
 
 namespace kimera
 {
@@ -59,11 +70,19 @@ namespace kimera
 		virtual ~SemanticTsdfServer() = default;
 
 	protected:
+		void insertPointcloud(const sensor_msgs::PointCloud2::ConstPtr &pointcloud_msg_in, const geometry_msgs::TransformStamped::ConstPtr &camera_pose_msg);
+		voxblox::Transformation odomMsgToVoxbloxTransform(const geometry_msgs::TransformStamped &pose_stamped);
+
 		// Configs.
 		SemanticIntegratorBase::SemanticConfig semantic_config_;
-
 		// Layers.
 		std::unique_ptr<vxb::Layer<SemanticVoxel>> semantic_layer_;
-	};
+		message_filters::Subscriber<sensor_msgs::PointCloud2> semantic_pointcloud_sub_;
+		// message_filters::Subscriber<nav_msgs::Odometry> camera_pose_sub_;
+		message_filters::Subscriber<geometry_msgs::TransformStamped> camera_pose_sub_;
 
+		typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::PointCloud2, geometry_msgs::TransformStamped> SyncPolicy;
+
+		std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;  // Use a shared pointer
+	};
 } // Namespace kimera

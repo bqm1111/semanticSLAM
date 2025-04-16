@@ -21,7 +21,7 @@ import time
 from omegaconf import OmegaConf
 from sensor_msgs.msg import PointCloud2, PointField
 import sensor_msgs.point_cloud2 as pc2
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
 import copy
 import torch
@@ -29,6 +29,7 @@ import struct
 import tf
 import tf2_ros
 import tf.transformations as tf_trans
+from tf.transformations import quaternion_matrix, translation_from_matrix, quaternion_from_matrix
 
 import numpy as np
 import cv2
@@ -177,40 +178,39 @@ def depth_to_color_frame(
     return depth_color_aligned, fx_d, fy_d, cx_d, cy_d, h, w
 
 
-def get_transform(target_frame, source_frame):
-    tf_buffer = tf2_ros.Buffer()
-    listener = tf2_ros.TransformListener(tf_buffer)
-    rospy.sleep(3)
+def get_transform(tf_buffer, target_frame, source_frame):
+    while not rospy.is_shutdown():  # Keep looking until transform is found or node is shut down
+        try:
+            trans = tf_buffer.lookup_transform(
+                target_frame, source_frame, rospy.Time(0), rospy.Duration(3.0)
+            )
 
-    try:
-        trans = tf_buffer.lookup_transform(
-            target_frame, source_frame, rospy.Time(0), rospy.Duration(3.0)
-        )
+            # Extract translation
+            translation = trans.transform.translation
+            t = np.array([translation.x, translation.y, translation.z])
 
-        # Extract translation
-        translation = trans.transform.translation
-        t = np.array([translation.x, translation.y, translation.z])
+            # Extract rotation (quaternion)
+            rotation = trans.transform.rotation
+            q = [rotation.x, rotation.y, rotation.z, rotation.w]
 
-        # Extract rotation (quaternion)
-        rotation = trans.transform.rotation
-        q = [rotation.x, rotation.y, rotation.z, rotation.w]
+            # Convert quaternion to rotation matrix
+            R = tf_trans.quaternion_matrix(q)[:3, :3]  # Extract 3x3 rotation matrix
 
-        # Convert quaternion to rotation matrix
-        R = tf_trans.quaternion_matrix(q)[:3, :3]  # Extract 3x3 rotation matrix
+            # Construct 4x4 transformation matrix
+            depth_to_color_matrix = np.eye(4)
+            depth_to_color_matrix[:3, :3] = R
+            depth_to_color_matrix[:3, 3] = t
 
-        # Construct 4x4 transformation matrix
-        depth_to_color_matrix = np.eye(4)
-        depth_to_color_matrix[:3, :3] = R
-        depth_to_color_matrix[:3, 3] = t
+            return depth_to_color_matrix  # Return as soon as transform is available
 
-        return depth_to_color_matrix
+        except (tf2_ros.LookupException, tf2_ros.ExtrapolationException):
+            rospy.logwarn(f"Transform between {source_frame} and {target_frame} not found. Retrying...")
+            rospy.sleep(0.5)  # Wait before retrying to avoid excessive looping
+        except rospy.ROSInterruptException:
+            rospy.logerr("ROS Node interrupted.")
+            break
 
-    except tf2_ros.LookupException:
-        rospy.logerr(f"Transform between {source_frame} and {target_frame} not found.")
-    except tf2_ros.ExtrapolationException:
-        rospy.logerr("TF extrapolation error.")
-    except rospy.ROSInterruptException:
-        pass
+    return None  # Return None if the node is shutting down
 
 # def convert_to_pointcloud2(points, stamp, frame_id="camera_rgb_optical_frame"):
 #     # Create header
@@ -351,6 +351,8 @@ class SemanticCloud:
             ckpt_path = rospy.get_param("semseg_model_ckpt")
             self.model = setup_model(seg_cfg_file, device, ckpt_path)
             self.model.eval()
+            predict(self.model, np.ones((480, 848, 3), dtype=np.uint8), np.random.rand(480, 848))
+            print("Finish warm up model")
 
         # Set up ROS
         print("Setting up ROS...")
@@ -368,6 +370,8 @@ class SemanticCloud:
         self.pcl_pub = rospy.Publisher(
             "/semantic_pcl/semantic_pcl", PointCloud2, queue_size=1
         )
+        self.semantic_pcl_camera_pose_pub = rospy.Publisher("/semantic_pcl/camera_pose", TransformStamped, queue_size=1)
+        start = time.time()
         camera_pose_topic = rospy.get_param("camera_pose_topic")
         color_image_topic = rospy.get_param("color_image_topic")
         depth_image_topic = rospy.get_param("depth_image_topic")
@@ -378,14 +382,12 @@ class SemanticCloud:
         tf_color_frame = rospy.get_param("d455_color_optical_frame")
         tf_depth_frame = rospy.get_param("d455_depth_optical_frame")
         self.process_sematic_freq = rospy.get_param("process_sematic_freq")
-        self.depth_to_color_transform = get_transform(
-            target_frame=tf_color_frame, source_frame=tf_depth_frame
+        self.tf_buffer = tf2_ros.Buffer()
+        listener = tf2_ros.TransformListener(self.tf_buffer)
+
+        self.depth_to_color_transform = get_transform(self.tf_buffer,target_frame=tf_color_frame, source_frame=tf_depth_frame
         )
-        self.color_to_depth_transform = get_transform(
-            target_frame=tf_depth_frame, source_frame=tf_color_frame
-        )
-        self.optical_normal_convention_depth_transform = get_transform(
-            target_frame="d455_depth_frame", source_frame="d455_depth_optical_frame"
+        self.color_to_depth_transform = get_transform(self.tf_buffer,target_frame=tf_depth_frame, source_frame=tf_color_frame
         )
 
         self.depth_scale = rospy.get_param("depth_scale", 0.001)
@@ -396,12 +398,14 @@ class SemanticCloud:
             queue_size=60,
             buff_size=30 * 480 * 848,
         )
+
         self.depth_sub = message_filters.Subscriber(
             depth_image_topic,
             Image,
             queue_size=60,
             buff_size=40 * 480 * 848,
         )  # increase buffer size to avoid delay (despite queue_size = 1)
+
         self.color_cam_info_sub = message_filters.Subscriber(
             color_cam_info_topic, CameraInfo
         )
@@ -412,7 +416,7 @@ class SemanticCloud:
         self.camera_pose = rospy.Subscriber(
             camera_pose_topic, Odometry, self.pose_callback
         )
-        
+
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [
                 self.color_sub,
@@ -423,7 +427,9 @@ class SemanticCloud:
             queue_size=10,
             slop=0.05,
         )
+
         self.ts.registerCallback(self.color_depth_callback)
+
         self.bridge = CvBridge()
         self.counter = 0
         self.latest_pose = None
@@ -454,15 +460,11 @@ class SemanticCloud:
         transformed_points = np.hstack((points, ones))  # Avoid unnecessary transposes
         transformed_points = np.matmul(transformed_points, T.T)[:, :3]
         return transformed_points
+
     def color_depth_callback(
         self, color_msg, depth_msg, color_caminfo_msg, depth_caminfo_msg
     ):
         # Convert ros Image message to numpy array
-        import time
-        
-        start = time.time()
-        begin = time.time()
-
         self.counter += 1
         if (
             self.counter % self.process_sematic_freq == 0
@@ -475,12 +477,10 @@ class SemanticCloud:
                 )
             except CvBridgeError as e:
                 print(e)
-            # print("==========> Read images time = ", time.time() - start)
-
-            start = time.time()
+            
             K_color = np.array(color_caminfo_msg.K).reshape(3, 3)
             K_depth = np.array(depth_caminfo_msg.K).reshape(3, 3)
-
+            
             aligned_depth, fx, fy, cx, cy, img_height, img_width = depth_to_color_frame(
                 depth_img,
                 self.depth_scale,
@@ -488,8 +488,7 @@ class SemanticCloud:
                 K_color,
                 self.depth_to_color_transform,
             )
-            # print("==========> Align depth to color time = ", time.time() - start)
-            start = time.time()
+
             if self.enable_semantic:
                 semantic_pred = predict(self.model, color_img, aligned_depth)
                 semantic_color, pred_arr = visualize(semantic_pred, num_classes=40)
@@ -500,8 +499,7 @@ class SemanticCloud:
                 colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
             else:
                 colors = np.ones_like(color_img) * 100
-            # print("=====================> inference time = ", time.time() - start)
-            start = time.time()
+
             colors = colors.reshape(-1, 3)
             depth_meters = depth_img.astype(np.float32) * self.depth_scale
             x, y = np.meshgrid(
@@ -517,7 +515,6 @@ class SemanticCloud:
             else:
                 valid_mask = np.isfinite(d) & (d != 0)
 
-
             x, y, d, colors = (
                 x[valid_mask],
                 y[valid_mask],
@@ -528,38 +525,73 @@ class SemanticCloud:
             x = (x - cx) * d / fx
             y = (y - cy) * d / fy
             z = d
-
             points = np.column_stack((x, y, z))
-            # print("==========> Calculate point cloud time = ", time.time() - start)
-            start = time.time()
+
             points = self.transform_point_cloud(points, self.color_to_depth_transform)
-            # print("==========> Transform pointcloud time = ", time.time() - start)
-            start = time.time()
             # Directly allocate memory for the final cloud data (avoids copies)
             cloud_data = np.empty((points.shape[0], 4), dtype=np.float32)
 
-            # Fill XYZ directly
             cloud_data[:, :3] = points
-
+ 
             # Pack RGB and store in the last column
             cloud_data[:, 3] = (
                 (colors[:, 0].astype(np.uint32) << 16)
                 | (colors[:, 1].astype(np.uint32) << 8)
                 | colors[:, 2].astype(np.uint32)
             ).view(np.float32)
-            # print("==========> Stack color time = ", time.time() - start)
-            start = time.time()
             cloud_ros = convert_to_pointcloud2(
                 cloud_data, stamp=color_msg.header.stamp, frame_id=self.frame_id
             )
+            # Get transformation between camera frame and world frame
+            try:
+                transform_camera_to_imu = self.tf_buffer.lookup_transform(
+                    'imu',       # target frame
+                    'camera0',    # source frame
+                    rospy.Time.now(), # get the latest available transform
+                    rospy.Duration(1.0) # timeout
+                )
+                self.semantic_pcl_camera_pose_pub.publish(self.construct_transform_msg(transform_camera_to_imu, self.latest_pose))
+                
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
+                rospy.logwarn(f"TF lookup failed: {e}")
+            self.pcl_pub.publish(cloud_ros)      
+    def construct_transform_msg(self, T_cam_to_imu, T_imu_to_world):
+                # Extract IMU → world from Odometry
+        pose = T_imu_to_world.pose.pose
+        trans = [pose.position.x, pose.position.y, pose.position.z]
+        rot = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+        T_imu_world = quaternion_matrix(rot)
+        T_imu_world[0:3, 3] = trans
 
-            # print("==========> Convert to message time = ", time.time() - start)
+        # Extract camera0 → imu from TransformStamped
+        t = T_cam_to_imu.transform.translation
+        q = T_cam_to_imu.transform.rotation
+        T_cam_imu = quaternion_matrix([q.x, q.y, q.z, q.w])
+        T_cam_imu[0:3, 3] = [t.x, t.y, t.z]
 
-            # Publish point cloud
-            self.pcl_pub.publish(cloud_ros)
-            # print("==========> Callback time = ", time.time() - begin)
+        # Compose transforms: T_cam_world = T_imu_world × T_cam_imu
+        T_cam_world = T_imu_world.dot(T_cam_imu)
+
+        # Extract translation and rotation
+        trans_cam_world = translation_from_matrix(T_cam_world)
+        rot_cam_world = quaternion_from_matrix(T_cam_world)
+
+        # Create TransformStamped message
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = T_imu_to_world.header.stamp
+        tf_msg.header.frame_id = "world"
+        tf_msg.child_frame_id = "camera0"
+        tf_msg.transform.translation.x = trans_cam_world[0]
+        tf_msg.transform.translation.y = trans_cam_world[1]
+        tf_msg.transform.translation.z = trans_cam_world[2]
+        tf_msg.transform.rotation.x = rot_cam_world[0]
+        tf_msg.transform.rotation.y = rot_cam_world[1]
+        tf_msg.transform.rotation.z = rot_cam_world[2]
+        tf_msg.transform.rotation.w = rot_cam_world[3]
+        return tf_msg
 
 
+            
 def main(args):
     rospy.init_node("semantic_cloud", anonymous=True)
     cfg_file = rospy.get_param("semseg_model_cfg")

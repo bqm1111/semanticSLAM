@@ -82,7 +82,7 @@ namespace kimera
 
 			const vxb::Point origin = T_G_C.getPosition();
 			const vxb::Point point_G = T_G_C * point_C;
-
+			
 			// Checks to see if another ray in this scan has already started 'close'
 			// to this location. If it has then we skip ray casting this point. We
 			// measure if a start location is 'close' to another points by inserting
@@ -95,7 +95,7 @@ namespace kimera
 			{
 				continue;
 			}
-			//
+
 			static constexpr bool cast_from_origin = false;
 			vxb::RayCaster ray_caster(origin,
 									  point_G,

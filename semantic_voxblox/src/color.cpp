@@ -15,7 +15,6 @@
 
 namespace kimera
 {
-
 	HashableColor::HashableColor(const Color &color) : Color(color) {}
 	HashableColor::HashableColor() : Color() {}
 	HashableColor::HashableColor(uint8_t r, uint8_t g, uint8_t b)
