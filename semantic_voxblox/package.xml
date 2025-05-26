@@ -24,7 +24,7 @@
 
   <depend>voxblox</depend>
   <depend>voxblox_ros</depend>
-  <depend>voxblox_msgs</depend>
+  <depend>voxblo</depend>
   <depend>voxblox_rviz_plugin</depend>
 
 </package>

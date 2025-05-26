@@ -74,6 +74,37 @@ SEMANTIC_CLASSES_NAMES = ["wall",
             "otherstructure",
             "otherfurniture",
             "otherprop"]
+@njit
+def get_unique_labels(mask):
+    return np.unique(mask)
+
+def erode_segmentation_mask(
+    mask: np.ndarray, kernel_size: int = 3, iterations: int = 1
+):
+    """
+    Erodes each object mask in the semantic segmentation mask.
+
+    Args:
+        mask (np.ndarray): HxW array where each pixel is a class label (e.g., 0 for background, 1, 2, ... for objects).
+        kernel_size (int): Size of the erosion kernel.
+        iterations (int): Number of erosion iterations.
+
+    Returns:
+        np.ndarray: Boolean mask of valid pixels (True = keep, False = remove).
+    """
+    unique_labels = get_unique_labels(mask)
+    valid_mask = np.zeros_like(mask, dtype=bool)
+    trimmed_mask = np.zeros_like(mask, dtype=np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    for label in unique_labels:
+        binary_mask = (mask == label).astype(np.uint8)
+        eroded_mask = cv2.erode(binary_mask, kernel, iterations=iterations)
+        valid_mask |= eroded_mask.astype(bool)
+        trimmed_mask[eroded_mask == 1] = label
+
+    return trimmed_mask, valid_mask
+
 @njit(fastmath=True, parallel=True)
 def depth_to_color_frame(
     depth_image_raw, depth_scale, depth_intrinsics, color_intrinsics, transform_matrix
@@ -281,17 +312,18 @@ def convert_to_pointcloud2(points, stamp, frame_id="camera_rgb_optical_frame"):
     return cloud_msg
 
 
-def visualize(pred, num_classes=40):
+def colorized_prediction(pred, num_classes=40):
     # Get color corresponding to each classes
     colors = np.array(get_class_colors(num_classes + 1))
 
     # Convert data to unit8 numpy type on cpu
     pred_arr = pred.squeeze(0).cpu().numpy().astype(np.uint8)
+    trimmed_mask, valid_mask = erode_segmentation_mask(pred_arr, kernel_size=7, iterations=1)
     colored_pred = np.zeros_like(pred_arr)
     colored_pred = np.stack((colored_pred,) * 3, axis=-1)
-    colored_pred[:] = colors[pred_arr[:]]
+    colored_pred[:] = colors[trimmed_mask[:]]
 
-    return colored_pred, np.array(pred_arr)
+    return colored_pred, np.array(trimmed_mask), valid_mask
 
 
 def setup_model(cfg_file, device, ckpt_path):
@@ -426,6 +458,7 @@ class SemanticCloud:
         self.ts.registerCallback(self.color_depth_callback)
         self.bridge = CvBridge()
         self.counter = 0
+        self.num_aggregated_observations = 0
         self.latest_pose = None
         print("Ready.")
 
@@ -454,15 +487,11 @@ class SemanticCloud:
         transformed_points = np.hstack((points, ones))  # Avoid unnecessary transposes
         transformed_points = np.matmul(transformed_points, T.T)[:, :3]
         return transformed_points
+    
     def color_depth_callback(
         self, color_msg, depth_msg, color_caminfo_msg, depth_caminfo_msg
     ):
         # Convert ros Image message to numpy array
-        import time
-        
-        start = time.time()
-        begin = time.time()
-
         self.counter += 1
         if (
             self.counter % self.process_sematic_freq == 0
@@ -475,9 +504,8 @@ class SemanticCloud:
                 )
             except CvBridgeError as e:
                 print(e)
-            # print("==========> Read images time = ", time.time() - start)
-
-            start = time.time()
+            self.num_aggregated_observations += 1
+            print("============> Number of aggregated observations: ", self.num_aggregated_observations)
             K_color = np.array(color_caminfo_msg.K).reshape(3, 3)
             K_depth = np.array(depth_caminfo_msg.K).reshape(3, 3)
 
@@ -488,11 +516,10 @@ class SemanticCloud:
                 K_color,
                 self.depth_to_color_transform,
             )
-            # print("==========> Align depth to color time = ", time.time() - start)
-            start = time.time()
+
             if self.enable_semantic:
                 semantic_pred = predict(self.model, color_img, aligned_depth)
-                semantic_color, pred_arr = visualize(semantic_pred, num_classes=40)
+                semantic_color, pred_arr, eroded_valid_mask = colorized_prediction(semantic_pred, num_classes=40)
                 semantic_color_msg = self.bridge.cv2_to_imgmsg(
                     semantic_color, encoding="bgr8"
                 )
@@ -500,8 +527,6 @@ class SemanticCloud:
                 colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
             else:
                 colors = np.ones_like(color_img) * 100
-            # print("=====================> inference time = ", time.time() - start)
-            start = time.time()
             colors = colors.reshape(-1, 3)
             depth_meters = depth_img.astype(np.float32) * self.depth_scale
             x, y = np.meshgrid(
@@ -512,11 +537,11 @@ class SemanticCloud:
                 x, y, d, pred_arr = x.ravel(), y.ravel(), aligned_depth.ravel(), pred_arr.ravel()
             else:
                 x, y, d, pred_arr = x.ravel(), y.ravel(), depth_meters.ravel(), pred_arr.ravel()
+            eroded_valid_mask = eroded_valid_mask.ravel()
             if self.semantic_index_map is not None:
-                valid_mask = np.isfinite(d) & (d != 0) & (np.isin(pred_arr, self.semantic_index_map))
+                valid_mask = np.isfinite(d) & (d != 0) & (np.isin(pred_arr, self.semantic_index_map)) & eroded_valid_mask
             else:
-                valid_mask = np.isfinite(d) & (d != 0)
-
+                valid_mask = np.isfinite(d) & (d != 0) & eroded_valid_mask
 
             x, y, d, colors = (
                 x[valid_mask],
@@ -530,11 +555,7 @@ class SemanticCloud:
             z = d
 
             points = np.column_stack((x, y, z))
-            # print("==========> Calculate point cloud time = ", time.time() - start)
-            start = time.time()
             points = self.transform_point_cloud(points, self.color_to_depth_transform)
-            # print("==========> Transform pointcloud time = ", time.time() - start)
-            start = time.time()
             # Directly allocate memory for the final cloud data (avoids copies)
             cloud_data = np.empty((points.shape[0], 4), dtype=np.float32)
 
@@ -547,17 +568,11 @@ class SemanticCloud:
                 | (colors[:, 1].astype(np.uint32) << 8)
                 | colors[:, 2].astype(np.uint32)
             ).view(np.float32)
-            # print("==========> Stack color time = ", time.time() - start)
-            start = time.time()
             cloud_ros = convert_to_pointcloud2(
                 cloud_data, stamp=color_msg.header.stamp, frame_id=self.frame_id
             )
-
-            # print("==========> Convert to message time = ", time.time() - start)
-
             # Publish point cloud
             self.pcl_pub.publish(cloud_ros)
-            # print("==========> Callback time = ", time.time() - begin)
 
 
 def main(args):

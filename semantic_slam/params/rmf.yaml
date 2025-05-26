@@ -9,4 +9,45 @@ semantic_pcl_frame_id: "camera0"
 enable_semantic: True
 process_sematic_freq: 10
 depth_scale: 0.001
-selected_semantic: ["all"]
+# selected_semantic: ["all"]
+selected_semantic:
+  [
+    "wall",
+    "floor",
+    "cabinet",
+    "bed",
+    "chair",
+    "sofa",
+    "table",
+    "door",
+    "window",
+    "bookshelf",
+    "picture",
+    "counter",
+    "blinds",
+    "desk",
+    "shelves",
+    "curtain",
+    "dresser",
+    "pillow",
+    "mirror",
+    "floor mat",
+    "clothes",
+    "books",
+    "refridgerator",
+    "television",
+    "paper",
+    "towel",
+    "shower curtain",
+    "box",
+    "whiteboard",
+    "person",
+    "night stand",
+    "toilet",
+    "sink",
+    "lamp",
+    "bathtub",
+    "bag",
+    "otherfurniture",
+    "otherprop",
+  ]
