@@ -75,6 +75,37 @@ SEMANTIC_CLASSES_NAMES = ["wall",
             "otherstructure",
             "otherfurniture",
             "otherprop"]
+@njit
+def get_unique_labels(mask):
+    return np.unique(mask)
+
+def erode_segmentation_mask(
+    mask: np.ndarray, kernel_size: int = 3, iterations: int = 1
+):
+    """
+    Erodes each object mask in the semantic segmentation mask.
+
+    Args:
+        mask (np.ndarray): HxW array where each pixel is a class label (e.g., 0 for background, 1, 2, ... for objects).
+        kernel_size (int): Size of the erosion kernel.
+        iterations (int): Number of erosion iterations.
+
+    Returns:
+        np.ndarray: Boolean mask of valid pixels (True = keep, False = remove).
+    """
+    unique_labels = get_unique_labels(mask)
+    valid_mask = np.zeros_like(mask, dtype=bool)
+    trimmed_mask = np.zeros_like(mask, dtype=np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    for label in unique_labels:
+        binary_mask = (mask == label).astype(np.uint8)
+        eroded_mask = cv2.erode(binary_mask, kernel, iterations=iterations)
+        valid_mask |= eroded_mask.astype(bool)
+        trimmed_mask[eroded_mask == 1] = label
+
+    return trimmed_mask, valid_mask
+
 @njit(fastmath=True, parallel=True)
 def depth_to_color_frame(
     depth_image_raw, depth_scale, depth_intrinsics, color_intrinsics, transform_matrix
@@ -281,17 +312,18 @@ def convert_to_pointcloud2(points, stamp, frame_id="camera_rgb_optical_frame"):
     return cloud_msg
 
 
-def visualize(pred, num_classes=40):
+def colorized_prediction(pred, num_classes=40):
     # Get color corresponding to each classes
     colors = np.array(get_class_colors(num_classes + 1))
 
     # Convert data to unit8 numpy type on cpu
     pred_arr = pred.squeeze(0).cpu().numpy().astype(np.uint8)
+    trimmed_mask, valid_mask = erode_segmentation_mask(pred_arr, kernel_size=5, iterations=2)
     colored_pred = np.zeros_like(pred_arr)
     colored_pred = np.stack((colored_pred,) * 3, axis=-1)
-    colored_pred[:] = colors[pred_arr[:]]
+    colored_pred[:] = colors[trimmed_mask[:]]
 
-    return colored_pred, np.array(pred_arr)
+    return colored_pred, np.array(trimmed_mask), valid_mask
 
 
 def setup_model(cfg_file, device, ckpt_path):
@@ -432,6 +464,7 @@ class SemanticCloud:
 
         self.bridge = CvBridge()
         self.counter = 0
+        self.num_aggregated_observations = 0
         self.latest_pose = None
         print("Ready.")
 
@@ -477,7 +510,9 @@ class SemanticCloud:
                 )
             except CvBridgeError as e:
                 print(e)
-            
+            self.num_aggregated_observations += 1
+
+            print("Number of aggregated observations: ", self.num_aggregated_observations)
             K_color = np.array(color_caminfo_msg.K).reshape(3, 3)
             K_depth = np.array(depth_caminfo_msg.K).reshape(3, 3)
             
@@ -491,7 +526,7 @@ class SemanticCloud:
 
             if self.enable_semantic:
                 semantic_pred = predict(self.model, color_img, aligned_depth)
-                semantic_color, pred_arr = visualize(semantic_pred, num_classes=40)
+                semantic_color, pred_arr, eroded_valid_mask = colorized_prediction(semantic_pred, num_classes=40)
                 semantic_color_msg = self.bridge.cv2_to_imgmsg(
                     semantic_color, encoding="bgr8"
                 )
@@ -510,10 +545,11 @@ class SemanticCloud:
                 x, y, d, pred_arr = x.ravel(), y.ravel(), aligned_depth.ravel(), pred_arr.ravel()
             else:
                 x, y, d, pred_arr = x.ravel(), y.ravel(), depth_meters.ravel(), pred_arr.ravel()
+            eroded_valid_mask = eroded_valid_mask.ravel()
             if self.semantic_index_map is not None:
-                valid_mask = np.isfinite(d) & (d != 0) & (np.isin(pred_arr, self.semantic_index_map))
+                valid_mask = np.isfinite(d) & (d != 0) & (np.isin(pred_arr, self.semantic_index_map)) & eroded_valid_mask
             else:
-                valid_mask = np.isfinite(d) & (d != 0)
+                valid_mask = np.isfinite(d) & (d != 0) & eroded_valid_mask
 
             x, y, d, colors = (
                 x[valid_mask],
@@ -555,8 +591,9 @@ class SemanticCloud:
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
                 rospy.logwarn(f"TF lookup failed: {e}")
             self.pcl_pub.publish(cloud_ros)      
+            
     def construct_transform_msg(self, T_cam_to_imu, T_imu_to_world):
-                # Extract IMU → world from Odometry
+        # Extract IMU → world from Odometry
         pose = T_imu_to_world.pose.pose
         trans = [pose.position.x, pose.position.y, pose.position.z]
         rot = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
