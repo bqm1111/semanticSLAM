@@ -30,7 +30,7 @@ selected_semantic:
     "curtain",
     "dresser",
     "pillow",
-    "mirror",
+    # "mirror",
     "floor mat",
     "clothes",
     "books",

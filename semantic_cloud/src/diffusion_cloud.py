@@ -99,11 +99,43 @@ def erode_segmentation_mask(
 
     for label in unique_labels:
         binary_mask = (mask == label).astype(np.uint8)
-        eroded_mask = cv2.erode(binary_mask, kernel, iterations=iterations)
+        if label == 0:
+            eroded_mask = cv2.erode(binary_mask, kernel, iterations=5)
+        else:
+            eroded_mask = cv2.erode(binary_mask, kernel, iterations=2)
         valid_mask |= eroded_mask.astype(bool)
         trimmed_mask[eroded_mask == 1] = label
 
     return trimmed_mask, valid_mask
+
+@njit
+def filter_flying_depth_data(depth_image, gradient_thresh=0.1):
+    h, w = depth_image.shape
+    filtered = np.zeros_like(depth_image)
+    mask = np.zeros((h, w), dtype=np.bool_)
+
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            center = depth_image[y, x]
+            if center == 0:
+                continue
+
+            up    = depth_image[y - 1, x]
+            down  = depth_image[y + 1, x]
+            left  = depth_image[y, x - 1]
+            right = depth_image[y, x + 1]
+
+            if up == 0 or down == 0 or left == 0 or right == 0:
+                continue
+
+            if (abs(center - up) < gradient_thresh and
+                abs(center - down) < gradient_thresh and
+                abs(center - left) < gradient_thresh and
+                abs(center - right) < gradient_thresh):
+                filtered[y, x] = center
+                mask[y, x] = True
+
+    return mask
 
 @njit(fastmath=True, parallel=True)
 def depth_to_color_frame(
@@ -318,7 +350,7 @@ def colorized_prediction(pred, num_classes=40):
 
     # Convert data to unit8 numpy type on cpu
     pred_arr = pred.squeeze(0).cpu().numpy().astype(np.uint8)
-    trimmed_mask, valid_mask = erode_segmentation_mask(pred_arr, kernel_size=7, iterations=1)
+    trimmed_mask, valid_mask = erode_segmentation_mask(pred_arr, kernel_size=5, iterations=4)
     colored_pred = np.zeros_like(pred_arr)
     colored_pred = np.stack((colored_pred,) * 3, axis=-1)
     colored_pred[:] = colors[trimmed_mask[:]]
@@ -366,6 +398,47 @@ def predict(model, rgb, depth):
     pred = score.argmax(1)
     return pred
 
+@njit
+def advanced_filter_depth_with_mask(depth_image, gradient_thresh=0.1, min_valid_neighbors=10
+):
+    h, w = depth_image.shape
+    filtered = np.zeros_like(depth_image)
+    mask = np.zeros((h, w), dtype=np.bool_)
+
+    for y in range(1, h - 1):
+        for x in range(1, w - 1):
+            center = depth_image[y, x]
+            if center == 0:
+                continue
+
+            # Neighbor values
+            neighbors = [
+                depth_image[y - 1, x],
+                depth_image[y + 1, x],
+                depth_image[y, x - 1],
+                depth_image[y, x + 1]
+            ]
+
+            # Count how many neighbors are valid (non-zero)
+            valid_count = 0
+            for v in neighbors:
+                if v != 0:
+                    valid_count += 1
+
+            if valid_count < min_valid_neighbors:
+                continue  # Likely a bad region
+
+            # Now check gradients
+            if (abs(center - neighbors[0]) < gradient_thresh and
+                abs(center - neighbors[1]) < gradient_thresh and
+                abs(center - neighbors[2]) < gradient_thresh and
+                abs(center - neighbors[3]) < gradient_thresh):
+                filtered[y, x] = center
+                mask[y, x] = False
+            else:
+                mask[y, x] = True 
+
+    return mask
 
 class SemanticCloud:
     def __init__(self, seg_cfg_file):
@@ -525,23 +598,29 @@ class SemanticCloud:
                 )
                 self.sem_img_pub.publish(semantic_color_msg)
                 colors = cv2.cvtColor(semantic_color, cv2.COLOR_BGR2RGB)
-            else:
+            else:          
                 colors = np.ones_like(color_img) * 100
             colors = colors.reshape(-1, 3)
             depth_meters = depth_img.astype(np.float32) * self.depth_scale
             x, y = np.meshgrid(
                 np.arange(img_width), np.arange(img_height), indexing="xy"
             )
-
+            depth_wall = np.where(pred_arr ==0, depth_meters, 0)
+            flying_wall_mask = advanced_filter_depth_with_mask(np.array(depth_wall), gradient_thresh=0.1, min_valid_neighbors=3)
+            flying_depth_valid_mask = filter_flying_depth_data(depth_meters, gradient_thresh=0.1)
+            
+            flying_depth_valid_mask = flying_depth_valid_mask.ravel()
+            eroded_valid_mask = eroded_valid_mask.ravel()
+            flying_wall_mask = ~flying_wall_mask.ravel()
             if self.enable_semantic:
                 x, y, d, pred_arr = x.ravel(), y.ravel(), aligned_depth.ravel(), pred_arr.ravel()
             else:
                 x, y, d, pred_arr = x.ravel(), y.ravel(), depth_meters.ravel(), pred_arr.ravel()
-            eroded_valid_mask = eroded_valid_mask.ravel()
+            
+            valid_mask = np.isfinite(d) & (d != 0) & eroded_valid_mask & flying_depth_valid_mask & flying_wall_mask
+
             if self.semantic_index_map is not None:
-                valid_mask = np.isfinite(d) & (d != 0) & (np.isin(pred_arr, self.semantic_index_map)) & eroded_valid_mask
-            else:
-                valid_mask = np.isfinite(d) & (d != 0) & eroded_valid_mask
+                valid_mask = valid_mask & np.isin(pred_arr, self.semantic_index_map)
 
             x, y, d, colors = (
                 x[valid_mask],

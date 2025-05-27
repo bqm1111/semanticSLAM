@@ -2,7 +2,7 @@ world_frame: world
 use_tf_transforms: True
 use_freespace_pointcloud: False
 tsdf_voxels_per_side: 16
-tsdf_voxel_size: 0.01
+tsdf_voxel_size: 0.02
 max_ray_length_m: 5.0
 truncation_distance: 0.6 #1.0
 voxel_carving_enabled: True
